@@ -366,6 +366,129 @@ def ipia(preco_domestico_rs_t: pd.Series, ppi_rs_t: pd.Series) -> pd.Series:
     return (preco_domestico_rs_t / ppi_rs_t) * 100.0
 
 # =============================================================================
+# 3b. ANCORA DE PRECO DOMESTICO
+# =============================================================================
+# Diferente do lado da importacao (Comex Stat/BCB sao APIs), o preco domestico
+# de bobina a quente vem de release trimestral de resultados de Usiminas/CSN -
+# nao existe API publica para isso. A ingestao e semi-manual, mas o CSV
+# resultante e pequeno e essencial para o indice rodar, entao fica VERSIONADO
+# no Git (data/curated/, ao contrario de data/raw/ e data/processed/, que sao
+# gitignored). Ver docs/adr/0003 para o raciocinio completo.
+#
+# Nos releases de 1T26 (Usiminas) e 2T26 (CSN) lidos de verdade nesta sessao,
+# NENHUMA das duas empresas separa volume/receita de laminados a quente dos
+# demais produtos planos no release trimestral nem na apresentacao de
+# resultados - so o agregado do segmento "Siderurgia" inteiro. Por isso todo
+# dado carregado por default hoje tem tipo="proxy_segmento_aco". Se um dia
+# uma fonte especifica de bobina a quente for confirmada, ela entra com
+# tipo="especifico_laminado_quente" na mesma tabela - o motor ja sabe
+# distinguir (ver `preco_domestico_ponderado`), nao e preciso remodelar nada.
+
+CAMINHO_PRECO_DOMESTICO_CSV = "data/curated/preco_domestico_aco.csv"
+TIPOS_DADO_DOMESTICO = {"especifico_laminado_quente", "proxy_segmento_aco", "misto"}
+
+
+def carregar_preco_domestico_trimestral(caminho_csv: str = CAMINHO_PRECO_DOMESTICO_CSV) -> pd.DataFrame:
+    """Le o CSV curado (versionado) de preco domestico por trimestre e empresa.
+
+    Calcula preco_rs_t = receita_liquida_segmento_rs / volume_vendas_t quando
+    a coluna preco_rs_t nao vier preenchida direto da fonte (caso da CSN, que
+    ja publica "Preco Medio" explicito no release, ao contrario da Usiminas).
+    """
+    df = pd.read_csv(caminho_csv)
+    obrigatorias = {"trimestre", "empresa", "volume_vendas_t", "tipo", "fonte"}
+    faltando = obrigatorias - set(df.columns)
+    if faltando:
+        raise ValueError(f"CSV de preco domestico sem colunas obrigatorias: {faltando}")
+    tipos_invalidos = set(df["tipo"]) - TIPOS_DADO_DOMESTICO
+    if tipos_invalidos:
+        raise ValueError(f"tipo de dado desconhecido no CSV: {tipos_invalidos}")
+    if "preco_rs_t" not in df.columns:
+        df["preco_rs_t"] = np.nan
+    precisa_calcular = df["preco_rs_t"].isna()
+    df.loc[precisa_calcular, "preco_rs_t"] = (
+        df.loc[precisa_calcular, "receita_liquida_segmento_rs"]
+        / df.loc[precisa_calcular, "volume_vendas_t"]
+    )
+    return df
+
+
+def preco_domestico_ponderado(df: pd.DataFrame) -> pd.DataFrame:
+    """Preco domestico por trimestre, media entre empresas ponderada por volume.
+
+    tipo do trimestre agregado: mantem o tipo se todas as empresas do
+    trimestre concordam; vira "misto" se ha tipos diferentes no mesmo
+    trimestre - nunca finge que o blend inteiro e especifico se so uma
+    parte e.
+    """
+    linhas = []
+    for trimestre, g in df.groupby("trimestre", sort=True):
+        preco = float(np.average(g["preco_rs_t"], weights=g["volume_vendas_t"]))
+        tipo = g["tipo"].iloc[0] if g["tipo"].nunique() == 1 else "misto"
+        linhas.append({
+            "trimestre": trimestre,
+            "preco_rs_t": preco,
+            "volume_vendas_t": float(g["volume_vendas_t"].sum()),
+            "tipo": tipo,
+            "empresas": ",".join(sorted(g["empresa"].unique())),
+        })
+    return pd.DataFrame(linhas)
+
+
+def encadear_preco_domestico_mensal(trimestral: pd.DataFrame, ipp_mensal: pd.Series) -> pd.DataFrame:
+    """Expande o nivel trimestral (preco_rs_t) para uma serie mensal.
+
+    Dentro do proprio trimestre confirmado, o nivel e usado direto
+    (metodo="nivel_trimestral" - e o dado real daquele trimestre, nao ha o
+    que encadear). Depois do trimestre mais recente confirmado, ate o
+    proximo release sair, o nivel e projetado mes a mes pela variacao do IPP
+    do IBGE (CNAE 24 - metalurgia):
+
+        preco(mes M) = nivel_trimestral_confirmado *
+                       (IPP[M] / IPP[ultimo mes do trimestre confirmado])
+
+    Isso evita usar o trimestre SEGUINTE (ainda nao divulgado) para
+    preencher meses passados - o problema de look-ahead que a interpolacao
+    linear teria. Ver docs/adr/0002.
+
+    Fallback: se o IPP do mes M ainda nao foi divulgado, repete o ultimo
+    nivel calculado (metodo="hold_flat_fallback") em vez de extrapolar.
+    """
+    tri = trimestral.copy()
+    tri["periodo"] = tri["trimestre"].apply(lambda t: pd.Period(t, freq="Q"))
+    tri = tri.sort_values("periodo").reset_index(drop=True)
+    ipp = pd.to_numeric(ipp_mensal, errors="coerce").sort_index()
+
+    fim = tri["periodo"].max().end_time.normalize()
+    if len(ipp):
+        fim = max(fim, ipp.index.max())
+    idx_mensal = pd.date_range(tri["periodo"].min().start_time.normalize(), fim, freq="MS")
+
+    linhas = []
+    ultimo_calculado = None
+    for mes in idx_mensal:
+        periodo_mes = pd.Period(mes, freq="Q")
+        confirmados = tri[tri["periodo"] <= periodo_mes]
+        if confirmados.empty:
+            continue
+        base = confirmados.iloc[-1]
+        if base["periodo"] == periodo_mes:
+            preco, metodo = float(base["preco_rs_t"]), "nivel_trimestral"
+        else:
+            mes_base = pd.Timestamp(base["periodo"].end_time.year, base["periodo"].end_time.month, 1)
+            ipp_base = ipp.get(mes_base)
+            ipp_m = ipp.get(mes)
+            if ipp_base is not None and ipp_m is not None and pd.notna(ipp_base) and pd.notna(ipp_m):
+                preco = float(base["preco_rs_t"]) * (float(ipp_m) / float(ipp_base))
+                metodo = "encadeado_ipp"
+            else:
+                preco, metodo = ultimo_calculado, "hold_flat_fallback"
+        ultimo_calculado = preco
+        linhas.append({"data": mes, "preco_rs_t": preco, "metodo": metodo,
+                       "trimestre_base": str(base["trimestre"]), "tipo_dado": base["tipo"]})
+    return pd.DataFrame(linhas).set_index("data")
+
+# =============================================================================
 # 4. COLETORES (rede)
 # =============================================================================
 
@@ -408,6 +531,28 @@ def sgs(codigo: int, inicio: str = "01/01/2010") -> pd.Series:
     df["data"] = pd.to_datetime(df["data"], format="%d/%m/%Y")
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
     return df.set_index("data")["valor"].rename(f"sgs_{codigo}")
+
+
+IBGE_SIDRA_IPP_URL = "https://servicodados.ibge.gov.br/api/v3/agregados/6903/periodos/{periodos}/variaveis/10008"
+# Tabela SIDRA 6903, variavel 10008 (numero-indice, dez/2018=100), classificacao
+# 842, categoria 46641 = "24 METALURGIA". CONFIRMADA AO VIVO nesta sessao via
+# servicodados.ibge.gov.br/api/v3/agregados/6903/metadados - a tabela 5796,
+# que aparece em buscas antigas por "IPP CNAE", esta ENCERRADA desde jan/2019;
+# nao usar.
+IBGE_IPP_CLASSIFICACAO_METALURGIA = "842[46641]"
+
+
+def ibge_sidra_ipp_metalurgia(periodos: str = "all") -> pd.Series:
+    """IPP (Indice de Precos ao Produtor) mensal do IBGE/SIDRA, CNAE 24 -
+    Metalurgia, numero-indice (dez/2018=100). Usado para encadear o preco
+    domestico trimestral em serie mensal - ver `encadear_preco_domestico_mensal`.
+    """
+    url = IBGE_SIDRA_IPP_URL.format(periodos=periodos)
+    dados = _get_json(url, {"localidades": "N1[all]", "classificacao": IBGE_IPP_CLASSIFICACAO_METALURGIA})
+    serie = dados[0]["resultados"][0]["series"][0]["serie"]
+    s = pd.to_numeric(pd.Series(serie), errors="coerce")
+    s.index = pd.to_datetime(s.index, format="%Y%m")
+    return s.rename("ipp_metalurgia").sort_index()
 
 
 def comex_importacao_ncm(ncm: List[str], ano_ini: int, ano_fim: int) -> pd.DataFrame:
@@ -455,27 +600,36 @@ def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.Da
       - peso_confiabilidade: 1.0 para meses com volume >= VOLUME_MINIMO_T,
         caindo linearmente ate 0 abaixo disso. NAO usa numero de registros
         como criterio - ver nota acima.
+
+    Tambem agrega frete_usd_t e seguro_usd_t (mesmo criterio do preco_usd_t:
+    soma do mes / soma de KG do mes) - sao os insumos que `custo_importacao_rs_t`
+    precisa alem do FOB para montar o CIF.
     """
     ncms = sorted(sum(NCM_BOBINA_QUENTE.values(), []))
     df = comex_importacao_ncm(ncms, ano_ini, ano_fim)
     if df.empty:
         return df
-    df["metricFOB"] = pd.to_numeric(df["metricFOB"], errors="coerce")
-    df["metricKG"]  = pd.to_numeric(df["metricKG"], errors="coerce")
+    for col in ("metricFOB", "metricKG", "metricFreight", "metricInsurance"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     df["data"] = pd.to_datetime(df["year"].astype(str) + "-"
                                  + df["monthNumber"].astype(str).str.zfill(2) + "-01")
     mensal = (df.groupby("data")
-                .agg(fob_usd=("metricFOB", "sum"), kg=("metricKG", "sum"), n_registros=("metricFOB", "size"))
+                .agg(fob_usd=("metricFOB", "sum"), kg=("metricKG", "sum"),
+                     frete_usd=("metricFreight", "sum"), seguro_usd=("metricInsurance", "sum"),
+                     n_registros=("metricFOB", "size"))
                 .reset_index())
-    mensal["preco_usd_t"] = 1000 * mensal["fob_usd"] / mensal["kg"]
+    mensal["preco_usd_t"]  = 1000 * mensal["fob_usd"] / mensal["kg"]
+    mensal["frete_usd_t"]  = 1000 * mensal["frete_usd"] / mensal["kg"]
+    mensal["seguro_usd_t"] = 1000 * mensal["seguro_usd"] / mensal["kg"]
     mensal["toneladas"] = mensal["kg"] / 1000
-    mensal = mensal.set_index("data")[["toneladas", "preco_usd_t", "n_registros"]]
+    mensal = mensal.set_index("data")[
+        ["toneladas", "preco_usd_t", "frete_usd_t", "seguro_usd_t", "n_registros"]]
 
     # revela e preenche buracos de mes (nenhum registro no Comex Stat naquele mes)
     completa = mensal.asfreq("MS")
     completa["interpolado"] = completa["preco_usd_t"].isna()
-    completa["preco_usd_t"] = completa["preco_usd_t"].interpolate(method="linear")
-    completa["toneladas"]   = completa["toneladas"].interpolate(method="linear")
+    for col in ("preco_usd_t", "frete_usd_t", "seguro_usd_t", "toneladas"):
+        completa[col] = completa[col].interpolate(method="linear")
     completa["n_registros"] = completa["n_registros"].fillna(0).astype(int)
 
     completa["peso_confiabilidade"] = (completa["toneladas"] / VOLUME_MINIMO_T).clip(upper=1.0)
@@ -663,6 +817,99 @@ def selftest() -> int:
           v.get("ok") and "var_explicada_pc1" in v,
           f"PC1 explica {v.get('var_explicada_pc1')}")
 
+    # --- 11. ancora de preco domestico: carregar CSV curado -----------------
+    import tempfile, os as _os
+    csv_sintetico = (
+        "trimestre,empresa,receita_liquida_segmento_rs,volume_vendas_t,preco_rs_t,tipo,fonte\n"
+        "2026Q1,USIM5,4700000000,1000000,,proxy_segmento_aco,teste\n"
+        "2026Q1,CSNA3,,500000,5000,proxy_segmento_aco,teste\n"
+        "2026Q2,USIM5,,1200000,5100,especifico_laminado_quente,teste\n"
+    )
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".csv")
+    try:
+        with _os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(csv_sintetico)
+        carregado = carregar_preco_domestico_trimestral(tmp_path)
+        preco_usim_calc = float(carregado.loc[carregado["empresa"] == "USIM5", "preco_rs_t"].iloc[0])
+        check("preco_rs_t calculado a partir de receita/volume quando nao vem pronto",
+              abs(preco_usim_calc - 4700.0) < 1e-6, f"calculado = {preco_usim_calc:.4f}")
+        preco_csn_direto = float(carregado.loc[carregado["empresa"] == "CSNA3", "preco_rs_t"].iloc[0])
+        check("preco_rs_t ja vindo pronto da fonte (CSN) nao e recalculado",
+              abs(preco_csn_direto - 5000.0) < 1e-9)
+    finally:
+        _os.remove(tmp_path)
+
+    # --- 12. ancora de preco domestico: blend ponderado por volume ----------
+    tri_teste = pd.DataFrame({
+        "trimestre":       ["2026Q1", "2026Q1", "2026Q2"],
+        "empresa":         ["USIM5", "CSNA3", "USIM5"],
+        "preco_rs_t":      [4700.0, 5000.0, 5100.0],
+        "volume_vendas_t": [1000000.0, 500000.0, 1200000.0],
+        "tipo":            ["proxy_segmento_aco", "proxy_segmento_aco", "especifico_laminado_quente"],
+    })
+    blend = preco_domestico_ponderado(tri_teste)
+    q1 = blend.loc[blend["trimestre"] == "2026Q1"].iloc[0]
+    esperado_q1 = (4700.0 * 1000000.0 + 5000.0 * 500000.0) / 1500000.0
+    check("blend ponderado por volume bate com a media manual",
+          abs(float(q1["preco_rs_t"]) - esperado_q1) < 1e-6,
+          f"calculado = {float(q1['preco_rs_t']):.4f}, esperado = {esperado_q1:.4f}")
+    check("trimestre com so uma empresa preserva o tipo original (nao vira misto)",
+          blend.loc[blend["trimestre"] == "2026Q2", "tipo"].iloc[0] == "especifico_laminado_quente")
+    tri_misto = pd.DataFrame({
+        "trimestre":       ["2026Q3", "2026Q3"],
+        "empresa":         ["USIM5", "CSNA3"],
+        "preco_rs_t":      [5200.0, 5100.0],
+        "volume_vendas_t": [1000000.0, 500000.0],
+        "tipo":            ["especifico_laminado_quente", "proxy_segmento_aco"],
+    })
+    blend_misto = preco_domestico_ponderado(tri_misto)
+    check("trimestre com tipos diferentes entre empresas vira 'misto' (nunca finge especifico)",
+          blend_misto["tipo"].iloc[0] == "misto", f"tipo = {blend_misto['tipo'].iloc[0]}")
+
+    # --- 13. ancora de preco domestico: encadeamento mensal via IPP ---------
+    # So 2026Q1 esta "confirmado" (so ele esta no CSV trimestral) - abr/mai/jun
+    # ainda nao tem release, entao precisam ser projetados mes a mes pelo IPP.
+    tri_encad = pd.DataFrame({
+        "trimestre":       ["2026Q1"],
+        "preco_rs_t":      [5000.0],
+        "tipo":            ["proxy_segmento_aco"],
+    })
+    ipp_teste = pd.Series({
+        pd.Timestamp("2026-03-01"): 100.0, pd.Timestamp("2026-04-01"): 102.0,
+        pd.Timestamp("2026-06-01"): 110.0,   # maio ausente de proposito (buraco)
+    })
+    mensal = encadear_preco_domestico_mensal(tri_encad, ipp_teste)
+    check("meses dentro do trimestre confirmado usam o nivel direto (nao encadeiam)",
+          mensal.loc["2026-01-01":"2026-03-01", "metodo"].eq("nivel_trimestral").all()
+          and abs(float(mensal.loc["2026-02-01", "preco_rs_t"]) - 5000.0) < 1e-9)
+    esperado_abr = 5000.0 * (102.0 / 100.0)
+    check("mes seguinte ao trimestre confirmado encadeia pela variacao do IPP",
+          mensal.loc["2026-04-01", "metodo"] == "encadeado_ipp"
+          and abs(float(mensal.loc["2026-04-01", "preco_rs_t"]) - esperado_abr) < 1e-6,
+          f"calculado = {float(mensal.loc['2026-04-01', 'preco_rs_t']):.4f}, esperado = {esperado_abr:.4f}")
+    check("mes sem IPP publicado ainda (maio) cai em hold_flat_fallback (nao vira NaN, nao extrapola)",
+          mensal.loc["2026-05-01", "metodo"] == "hold_flat_fallback"
+          and abs(float(mensal.loc["2026-05-01", "preco_rs_t"])
+                  - float(mensal.loc["2026-04-01", "preco_rs_t"])) < 1e-9)
+    esperado_jun = 5000.0 * (110.0 / 100.0)
+    check("mes seguinte, com IPP de volta a disponivel, volta a encadear (nao fica preso no fallback)",
+          mensal.loc["2026-06-01", "metodo"] == "encadeado_ipp"
+          and abs(float(mensal.loc["2026-06-01", "preco_rs_t"]) - esperado_jun) < 1e-6)
+
+    # --- 14. round-trip: ancora domestica + custo de importacao -> IPIA -----
+    idx_rt = pd.date_range("2026-01-01", periods=3, freq="MS")
+    p_rt = ParamsIPIA(aliquota_ii=0.10, afrmm=0.08, despesas_porto_rs_t=200.0,
+                      frete_interno_rs_t=100.0, margem_importador=0.0)
+    r_rt = custo_importacao_rs_t(pd.Series([500.0] * 3, index=idx_rt),
+                                 pd.Series([50.0] * 3, index=idx_rt),
+                                 pd.Series([5.0] * 3, index=idx_rt),
+                                 pd.Series([5.0] * 3, index=idx_rt), p_rt)
+    preco_domestico_rt = mensal["preco_rs_t"].reindex(idx_rt)
+    ix_rt = ipia(preco_domestico_rt, r_rt["ppi_brl_t"])
+    esperado_ix_rt = (preco_domestico_rt / r_rt["ppi_brl_t"]) * 100.0
+    check("integracao ancora domestica + custo de importacao nao quebra a aritmetica do ipia()",
+          bool(((ix_rt - esperado_ix_rt).abs() < 1e-9).all()))
+
     print("-" * 74)
     if falhas:
         print(f" RESULTADO: {len(falhas)} FALHA(S): {falhas}")
@@ -701,6 +948,13 @@ def check_sources() -> int:
     except Exception as e:
         ok = False
         print(f"  [ERRO] Comex Stat (NCMs de bobina): {e}")
+    try:
+        s = ibge_sidra_ipp_metalurgia(periodos="-3")
+        vals = ", ".join(f"{d:%Y-%m}={v:.2f}" for d, v in s.items())
+        print(f"  [OK ] IBGE/SIDRA IPP metalurgia (tabela 6903): {vals}")
+    except Exception as e:
+        ok = False
+        print(f"  [ERRO] IBGE/SIDRA IPP metalurgia: {e}")
     print("-" * 74)
     print("  SCR.data (CNAE): baixe os ZIP mensais em")
     print("     https://dadosabertos.bcb.gov.br/dataset/scr_data")
@@ -716,6 +970,10 @@ def main():
     ap.add_argument("--spec", action="store_true", help="imprime a especificacao do ICCS")
     ap.add_argument("--preview-bobina", action="store_true",
                      help="puxa a serie mensal real de preco de importacao (USD/t) dos 13 NCMs de bobina a quente e salva em data/processed/")
+    ap.add_argument("--preview-domestico", action="store_true",
+                     help="encadeia o preco domestico trimestral (data/curated/) em serie mensal via IPP/IBGE e salva em data/processed/")
+    ap.add_argument("--ipia", action="store_true",
+                     help="calcula o IPIA completo (custo de importacao + ancora domestica) e salva em data/processed/")
     ap.add_argument("--ano-ini", type=int, default=2020)
     ap.add_argument("--ano-fim", type=int, default=2026)
     a = ap.parse_args()
@@ -735,6 +993,53 @@ def main():
         caminho = "data/processed/serie_bobina_quente.csv"
         s.to_csv(caminho, index=False)
         print(f"\nSalvo em {caminho} ({len(s)} meses)")
+        sys.exit(0)
+    if a.preview_domestico:
+        print("Encadeando preco domestico trimestral (data/curated/) via IPP/IBGE ...")
+        trimestral = carregar_preco_domestico_trimestral()
+        blend = preco_domestico_ponderado(trimestral)
+        ipp = ibge_sidra_ipp_metalurgia()
+        mensal = encadear_preco_domestico_mensal(blend, ipp)
+        print(mensal.to_string())
+        import os
+        os.makedirs("data/processed", exist_ok=True)
+        caminho = "data/processed/serie_domestico_aco.csv"
+        mensal.to_csv(caminho)
+        print(f"\nSalvo em {caminho} ({len(mensal)} meses)")
+        sys.exit(0)
+    if a.ipia:
+        print(f"Calculando IPIA, {a.ano_ini}-{a.ano_fim} ...")
+        bobina = serie_mensal_preco_bobina(a.ano_ini, a.ano_fim)
+        if bobina.empty:
+            print("Nenhum dado de importacao retornado - confira o periodo ou rode --check-sources primeiro.")
+            sys.exit(1)
+        bobina = bobina.set_index("data")
+        # cambio_venda (codigo 1, PTAX) e serie diaria - a API do BCB rejeita
+        # (406) janela de consulta acima de 10 anos para series diarias, entao
+        # o inicio e amarrado a --ano-ini em vez do default de sgs() (2010),
+        # que sozinho ja estoura o limite a partir de 2020.
+        cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{a.ano_ini}").reindex(bobina.index, method="ffill")
+        custo = custo_importacao_rs_t(bobina["preco_usd_t"], bobina["frete_usd_t"],
+                                      bobina["seguro_usd_t"], cambio, ParamsIPIA())
+        trimestral = carregar_preco_domestico_trimestral()
+        blend = preco_domestico_ponderado(trimestral)
+        ipp = ibge_sidra_ipp_metalurgia()
+        domestico = encadear_preco_domestico_mensal(blend, ipp)
+        idx = bobina.index.intersection(domestico.index)
+        out = pd.DataFrame({
+            "ipia": ipia(domestico.loc[idx, "preco_rs_t"], custo.loc[idx, "ppi_brl_t"]),
+            "preco_domestico_rs_t": domestico.loc[idx, "preco_rs_t"],
+            "ppi_rs_t": custo.loc[idx, "ppi_brl_t"],
+            "tipo_dado_domestico": domestico.loc[idx, "tipo_dado"],
+            "metodo_domestico": domestico.loc[idx, "metodo"],
+            "peso_confiabilidade_importacao": bobina.loc[idx, "peso_confiabilidade"],
+        })
+        print(out.to_string())
+        import os
+        os.makedirs("data/processed", exist_ok=True)
+        caminho = "data/processed/ipia_mensal.csv"
+        out.to_csv(caminho)
+        print(f"\nSalvo em {caminho} ({len(out)} meses)")
         sys.exit(0)
     if a.spec:
         ICCS.validar()

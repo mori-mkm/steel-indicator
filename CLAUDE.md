@@ -42,6 +42,15 @@ referência" abaixo.
   `interpolado`, `suavizado`, `peso_confiabilidade`) — nunca indistinguíveis
   do dado bruto.
 
+## Registro de decisões (ADR)
+Toda decisão de arquitetura, metodologia de cálculo, ou escolha entre
+alternativas com trade-off relevante vira um ADR em `docs/adr/`, numerado
+sequencialmente (`0001-titulo-curto.md`). Formato: Contexto, Decisão,
+Alternativas consideradas (e por que foram descartadas), Consequências.
+O ADR é commitado **junto** com a mudança de código que ele documenta, não
+depois e separado. Exemplos já no projeto: `docs/adr/0001` a `0003`,
+sobre a âncora de preço doméstico do IPIA.
+
 ## Workflow obrigatório
 Ao receber uma tarefa:
 1. Inspecione o código relevante antes de propor alterações.
@@ -106,8 +115,19 @@ O usuário deve ser envolvido quando houver:
 
 ## Contexto e documentos de referência
 - `src/indices_setoriais.py`: motor de cálculo (ICCS, IPIA), com
-  `NCM_BOBINA_QUENTE`, `ParamsIPIA`, `serie_mensal_preco_bobina` e o
-  autoteste.
+  `NCM_BOBINA_QUENTE`, `ParamsIPIA`, `serie_mensal_preco_bobina` (lado da
+  importação) e `carregar_preco_domestico_trimestral` /
+  `preco_domestico_ponderado` / `encadear_preco_domestico_mensal` /
+  `ibge_sidra_ipp_metalurgia` (lado do preço doméstico), e o autoteste.
+  CLI: `--preview-bobina`, `--preview-domestico`, `--ipia`.
+- `data/curated/preco_domestico_aco.csv`: dado curado (versionado no Git,
+  ao contrário de `data/raw/`/`data/processed/`) de preço doméstico
+  trimestral por empresa, extraído de release de resultados. Ver
+  `docs/adr/0003` para o porquê de ser versionado e para o critério de
+  `tipo` (`especifico_laminado_quente` vs. `proxy_segmento_aco` vs.
+  `misto`).
+- `docs/adr/`: decisões de arquitetura/metodologia registradas (ver seção
+  "Registro de decisões" acima).
 - A metodologia completa (fórmulas do ICCS/IPIA, regras de governança,
   matriz de licenciamento de fonte) vive num manual metodológico que **não
   está neste repositório** — foi preparado para outro engajamento e contém
@@ -116,8 +136,15 @@ O usuário deve ser envolvido quando houver:
   Considerar criar um `docs/METODOLOGIA.md` só com as regras de cálculo
   (sem o conteúdo de negócio/estratégia) para não depender de memória de
   conversa.
-- Pendências conhecidas no momento em que este arquivo foi criado: (1)
-  âncora de preço doméstico via ITR/release de Usiminas/CSN ainda não
-  confirmada quanto à granularidade por produto; (2) status definitivo do
-  antidumping de laminado a quente da China (esperado para julho/2026,
-  ainda não confirmado) — afeta `antidumping_usd_t`.
+- Pendências conhecidas (atualizado ago/2026): (1) âncora de preço
+  doméstico — **investigada de verdade** (releases 1T26 Usiminas e 2T26
+  CSN lidos por completo, incluindo apresentação de slides da Usiminas):
+  nenhuma das duas empresas publica volume/receita/preço específico de
+  laminados a quente separado dos demais produtos planos, só o agregado do
+  segmento "Siderurgia" — por isso o motor usa `tipo="proxy_segmento_aco"`
+  hoje (ver `docs/adr/0003`). Os dois trimestres carregados no CSV curado
+  (2026Q1 Usiminas, 2026Q2 CSN) também não são a mesma janela para as duas
+  empresas — mais dado precisa ser curado para um blend de verdade (ver
+  `docs/adr/0001`). (2) status definitivo do antidumping de laminado a
+  quente da China (esperado para julho/2026, ainda não confirmado) — afeta
+  `antidumping_usd_t`.
