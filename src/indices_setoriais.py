@@ -383,6 +383,24 @@ def _get_json(url: str, params: dict | None = None, tentativas: int = 3):
             time.sleep(2 ** i)
 
 
+def _post_json(url: str, payload: dict, tentativas: int = 3):
+    """POST com JSON no corpo. O endpoint /general do Comex Stat exige POST -
+    uma chamada GET com o filtro na querystring (como uma versao anterior
+    deste script fazia) recebe 403 do WAF da API, nao por falta de acesso."""
+    import requests
+    for i in range(tentativas):
+        try:
+            r = requests.post(url, json=payload, timeout=60,
+                              headers={"User-Agent": "pesquisa-setorial/1.0",
+                                       "Content-Type": "application/json"})
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            if i == tentativas - 1:
+                raise
+            time.sleep(2 ** i)
+
+
 def sgs(codigo: int, inicio: str = "01/01/2010") -> pd.Series:
     """Serie do Sistema Gerenciador de Series Temporais do Banco Central."""
     dados = _get_json(SGS_URL.format(cod=codigo), {"dataInicial": inicio})
@@ -407,13 +425,66 @@ def comex_importacao_ncm(ncm: List[str], ano_ini: int, ano_fim: int) -> pd.DataF
         "details": ["ncm", "country"],
         "metrics": ["metricFOB", "metricKG", "metricFreight", "metricInsurance"],
     }
-    dados = _get_json(COMEX_URL, {"filter": json.dumps(payload)})
+    dados = _post_json(COMEX_URL, payload)
+    if "data" not in dados:
+        # a resposta veio, mas nao no formato esperado - imprime as chaves
+        # de topo para facilitar o diagnostico em vez de falhar silencioso
+        raise ValueError(f"resposta sem campo 'data'; chaves recebidas: {list(dados.keys())}")
     lista = dados.get("data", {}).get("list", [])
     return pd.DataFrame(lista)
 
-# =============================================================================
-# 5. AUTOTESTE (sem rede) - valida a matematica
-# =============================================================================
+VOLUME_MINIMO_T = 5000.0  # abaixo disso, peso de confiabilidade cai linearmente ate 0
+# Por que volume e nao numero de registros: um mes com poucos parceiros
+# comerciais mas volume grande (ex. set/2021, pico do supercycle: 27 mil t
+# em so 6 registros, porque o mercado global estava concentrado na escassez)
+# e um sinal de preco REAL, nao ruido. Um mes com volume pequeno (ex. jun/2020,
+# 55 t em 3 registros) e ruido de fato. Confundir os dois penalizaria
+# exatamente os meses de maior conteudo informativo do indice.
+
+
+def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFrame:
+    """Serie mensal de preco unitario de importacao (USD/t) para os 13 NCMs de
+    bobina a quente, ponderado por volume (soma FOB / soma KG de todos os NCMs
+    e paises no mes - nao e media simples entre NCMs, e um preco medio real
+    do que o Brasil comprou naquele mes).
+
+    Aplica dois tratamentos, ambos versionados e explicitos via colunas:
+      - interpolado: mes sem registro no Comex Stat, preenchido por
+        interpolacao linear entre os meses vizinhos. Provisorio - o ideal e
+        investigar por que o mes ficou sem dado antes de publicar de verdade.
+      - peso_confiabilidade: 1.0 para meses com volume >= VOLUME_MINIMO_T,
+        caindo linearmente ate 0 abaixo disso. NAO usa numero de registros
+        como criterio - ver nota acima.
+    """
+    ncms = sorted(sum(NCM_BOBINA_QUENTE.values(), []))
+    df = comex_importacao_ncm(ncms, ano_ini, ano_fim)
+    if df.empty:
+        return df
+    df["metricFOB"] = pd.to_numeric(df["metricFOB"], errors="coerce")
+    df["metricKG"]  = pd.to_numeric(df["metricKG"], errors="coerce")
+    df["data"] = pd.to_datetime(df["year"].astype(str) + "-"
+                                 + df["monthNumber"].astype(str).str.zfill(2) + "-01")
+    mensal = (df.groupby("data")
+                .agg(fob_usd=("metricFOB", "sum"), kg=("metricKG", "sum"), n_registros=("metricFOB", "size"))
+                .reset_index())
+    mensal["preco_usd_t"] = 1000 * mensal["fob_usd"] / mensal["kg"]
+    mensal["toneladas"] = mensal["kg"] / 1000
+    mensal = mensal.set_index("data")[["toneladas", "preco_usd_t", "n_registros"]]
+
+    # revela e preenche buracos de mes (nenhum registro no Comex Stat naquele mes)
+    completa = mensal.asfreq("MS")
+    completa["interpolado"] = completa["preco_usd_t"].isna()
+    completa["preco_usd_t"] = completa["preco_usd_t"].interpolate(method="linear")
+    completa["toneladas"]   = completa["toneladas"].interpolate(method="linear")
+    completa["n_registros"] = completa["n_registros"].fillna(0).astype(int)
+
+    completa["peso_confiabilidade"] = (completa["toneladas"] / VOLUME_MINIMO_T).clip(upper=1.0)
+    completa.loc[completa["interpolado"], "peso_confiabilidade"] = 0.0  # mes interpolado nao e dado real
+
+    return completa.reset_index()
+
+
+
 
 def _serie_sintetica(n=180, seed=0, tendencia=0.0, nivel=10.0, ruido=1.0):
     rng = np.random.default_rng(seed)
@@ -545,6 +616,27 @@ def selftest() -> int:
     check("com antidumping=0 (default), resultado nao muda vs. calculo original",
           abs(float(r["ppi_brl_t"].iloc[0]) - esperado_ppi) < 1e-9)
 
+    # --- 8c. peso de confiabilidade: por VOLUME, nao por numero de registros -
+    # mes com poucos registros mas volume grande (ex.: mercado concentrado no
+    # pico de um supercycle) deve ficar com peso pleno; mes de volume pequeno,
+    # mesmo com registros moderados, deve ficar com peso reduzido.
+    idx_meses = pd.date_range("2021-01-01", periods=3, freq="MS")
+    bruto = pd.DataFrame({
+        "toneladas":   [27379.0, 1373.0, 55.0],   # alto / abaixo do limiar / muito baixo
+        "preco_usd_t": [1082.0, 539.0, 656.0],
+        "n_registros": [6, 6, 3],                  # dois primeiros tem o MESMO n_registros
+    }, index=idx_meses)
+    peso = (bruto["toneladas"] / VOLUME_MINIMO_T).clip(upper=1.0)
+    check("mes de alto volume e poucos registros recebe peso pleno (nao penalizado por n_registros)",
+          abs(peso.iloc[0] - 1.0) < 1e-9,
+          f"peso calculado = {peso.iloc[0]:.3f} (deveria ser 1.0, volume={bruto['toneladas'].iloc[0]:.0f}t >= {VOLUME_MINIMO_T:.0f}t)")
+    check("dois meses com o MESMO n_registros mas volumes diferentes recebem pesos diferentes",
+          abs(peso.iloc[0] - peso.iloc[1]) > 0.5,
+          f"peso[alto volume]={peso.iloc[0]:.3f} vs peso[baixo volume]={peso.iloc[1]:.3f}, ambos com n_registros=6")
+    check("mes de volume muito baixo recebe peso proximo de zero",
+          peso.iloc[2] < 0.02,
+          f"peso calculado = {peso.iloc[2]:.4f}")
+
     # --- 9. diagnostico de antecedencia detecta sinal plantado --------------
     base = _serie_sintetica(n=160, seed=7, ruido=0.5)
     # alvo cujo movimento futuro responde ao sinal com defasagem: piora quando
@@ -595,12 +687,20 @@ def check_sources() -> int:
         except Exception as e:
             ok = False
             print(f"  [ERRO] SGS {cod:>6}  {nome:<22} {e}")
+    ncms_bobina = sorted(sum(NCM_BOBINA_QUENTE.values(), []))
     try:
-        df = comex_importacao_ncm(["72081000"], 2025, 2025)
-        print(f"  [OK ] Comex Stat: {len(df)} linhas para NCM 72081000 em 2025")
+        df = comex_importacao_ncm(ncms_bobina, 2025, 2025)
+        print(f"  [OK ] Comex Stat: {len(df)} linhas para os {len(ncms_bobina)} "
+              f"NCMs de bobina a quente em 2025")
+        if len(df) and "coNcm" in df.columns:
+            contagem = df["coNcm"].value_counts()
+            faltando = [n for n in ncms_bobina if n not in contagem.index]
+            for n in ncms_bobina:
+                print(f"          {n}  {contagem.get(n, 0):>4} linhas"
+                      + ("  <- SEM DADO EM 2025, confirme se o codigo existe" if n in faltando else ""))
     except Exception as e:
         ok = False
-        print(f"  [ERRO] Comex Stat: {e}")
+        print(f"  [ERRO] Comex Stat (NCMs de bobina): {e}")
     print("-" * 74)
     print("  SCR.data (CNAE): baixe os ZIP mensais em")
     print("     https://dadosabertos.bcb.gov.br/dataset/scr_data")
@@ -614,11 +714,28 @@ def main():
     ap.add_argument("--selftest", action="store_true", help="valida a matematica, sem rede")
     ap.add_argument("--check-sources", action="store_true", help="testa as APIs publicas")
     ap.add_argument("--spec", action="store_true", help="imprime a especificacao do ICCS")
+    ap.add_argument("--preview-bobina", action="store_true",
+                     help="puxa a serie mensal real de preco de importacao (USD/t) dos 13 NCMs de bobina a quente e salva em data/processed/")
+    ap.add_argument("--ano-ini", type=int, default=2020)
+    ap.add_argument("--ano-fim", type=int, default=2026)
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
     if a.check_sources:
         sys.exit(check_sources())
+    if a.preview_bobina:
+        print(f"Puxando Comex Stat, NCMs de bobina a quente, {a.ano_ini}-{a.ano_fim} ...")
+        s = serie_mensal_preco_bobina(a.ano_ini, a.ano_fim)
+        if s.empty:
+            print("Nenhum dado retornado - confira o periodo ou rode --check-sources primeiro.")
+            sys.exit(1)
+        print(s.to_string(index=False))
+        import os
+        os.makedirs("data/processed", exist_ok=True)
+        caminho = "data/processed/serie_bobina_quente.csv"
+        s.to_csv(caminho, index=False)
+        print(f"\nSalvo em {caminho} ({len(s)} meses)")
+        sys.exit(0)
     if a.spec:
         ICCS.validar()
         print(f"\n{ICCS.codigo} - {ICCS.nome}")
