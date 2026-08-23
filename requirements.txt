@@ -1,0 +1,14 @@
+# Dependencias diretas do IPIA Brasil, geradas a partir do que esta
+# realmente instalado no .venv (pip freeze) e filtradas para pacotes de
+# topo - as transitivas (cffi, contourpy, pillow, pdfminer.six, etc.) sao
+# resolvidas automaticamente pelo pip a partir destas.
+pandas==3.0.5
+numpy==2.4.6
+requests==2.34.2
+matplotlib==3.11.1
+
+# extracao de texto de PDFs de release (data/raw/) para curar
+# data/curated/preco_domestico_aco.csv - nao e importado por
+# src/indices_setoriais.py, e usado no workflow manual de curadoria
+# (ver docs/adr/0003)
+pdfplumber==0.11.10

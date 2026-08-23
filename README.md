@@ -9,6 +9,12 @@ multi-produto são próximos passos planejados.
 
 Todo o motor vive em `src/indices_setoriais.py`.
 
+## Instalação
+
+```
+pip install -r requirements.txt
+```
+
 ## O que o IPIA calcula
 
 IPIA = preço doméstico / custo de importação posto no cliente × 100.
