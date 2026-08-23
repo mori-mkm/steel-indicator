@@ -588,23 +588,53 @@ VOLUME_MINIMO_T = 5000.0  # abaixo disso, peso de confiabilidade cai linearmente
 # exatamente os meses de maior conteudo informativo do indice.
 
 
+def suavizar_preco_importacao(df: pd.DataFrame) -> pd.DataFrame:
+    """Suavizacao SELETIVA do preco de importacao (`preco_usd_t`).
+
+    So meses com peso_confiabilidade < 1.0 (volume abaixo de
+    VOLUME_MINIMO_T) recebem, na coluna `preco_usd_t_publicado`, a media
+    movel CENTRADA de 3 meses (rolling window=3, center=True,
+    min_periods=1) - reduz o ruido de meses de volume fino sem descartar
+    a observacao. Meses com peso_confiabilidade == 1.0 NUNCA sao
+    suavizados, mesmo com poucos registros (ex.: pico de supercycle com
+    volume alto mas poucos parceiros comerciais) - o publicado fica
+    identico ao bruto. `preco_usd_t` (bruto) nunca e sobrescrito, fica
+    sempre disponivel para auditoria. Adiciona a coluna booleana
+    `suavizado` (True quando publicado difere do bruto).
+
+    Requer as colunas `preco_usd_t` e `peso_confiabilidade` ja calculadas
+    (ver `serie_mensal_preco_bobina`).
+    """
+    out = df.copy()
+    media_movel = out["preco_usd_t"].rolling(window=3, center=True, min_periods=1).mean()
+    out["preco_usd_t_publicado"] = out["preco_usd_t"].where(
+        out["peso_confiabilidade"] >= 1.0, media_movel)
+    out["suavizado"] = (out["preco_usd_t_publicado"] - out["preco_usd_t"]).abs() > 1e-9
+    return out
+
+
 def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFrame:
     """Serie mensal de preco unitario de importacao (USD/t) para os 13 NCMs de
     bobina a quente, ponderado por volume (soma FOB / soma KG de todos os NCMs
     e paises no mes - nao e media simples entre NCMs, e um preco medio real
     do que o Brasil comprou naquele mes).
 
-    Aplica dois tratamentos, ambos versionados e explicitos via colunas:
+    Aplica tres tratamentos, todos versionados e explicitos via colunas:
       - interpolado: mes sem registro no Comex Stat, preenchido por
         interpolacao linear entre os meses vizinhos. Provisorio - o ideal e
         investigar por que o mes ficou sem dado antes de publicar de verdade.
       - peso_confiabilidade: 1.0 para meses com volume >= VOLUME_MINIMO_T,
         caindo linearmente ate 0 abaixo disso. NAO usa numero de registros
         como criterio - ver nota acima.
+      - preco_usd_t_publicado / suavizado: suavizacao seletiva via
+        `suavizar_preco_importacao` - so meses de peso_confiabilidade < 1.0
+        sao suavizados (media movel de 3 meses); meses de peso pleno ficam
+        identicos ao bruto.
 
     Tambem agrega frete_usd_t e seguro_usd_t (mesmo criterio do preco_usd_t:
     soma do mes / soma de KG do mes) - sao os insumos que `custo_importacao_rs_t`
-    precisa alem do FOB para montar o CIF.
+    precisa alem do FOB para montar o CIF. Nao sao suavizados - a suavizacao
+    seletiva se aplica so ao preco (ver docs/METODOLOGIA.md secao 5).
     """
     ncms = sorted(sum(NCM_BOBINA_QUENTE.values(), []))
     df = comex_importacao_ncm(ncms, ano_ini, ano_fim)
@@ -636,6 +666,8 @@ def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.Da
     completa["peso_confiabilidade"] = (completa["toneladas"] / VOLUME_MINIMO_T).clip(upper=1.0)
     completa.loc[completa["interpolado"], "peso_confiabilidade"] = 0.0  # mes interpolado nao e dado real
 
+    completa = suavizar_preco_importacao(completa)
+
     return completa.reset_index()
 
 
@@ -659,7 +691,13 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFra
     # o inicio e amarrado a ano_ini em vez do default de sgs() (2010),
     # que sozinho ja estoura o limite a partir de 2020.
     cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}").reindex(bobina.index, method="ffill")
-    custo = custo_importacao_rs_t(bobina["preco_usd_t"], bobina["frete_usd_t"],
+    # preco_usd_t_publicado (nao o preco_usd_t bruto) alimenta o custo de
+    # importacao: e a serie com suavizacao seletiva ja aplicada (identica ao
+    # bruto em meses de peso pleno, media movel de 3 meses em meses de peso
+    # reduzido) - ver `suavizar_preco_importacao` e docs/adr/0005. O bruto
+    # continua disponivel na coluna preco_usd_t para auditoria, so nao e o
+    # que entra no calculo do IPIA publicado.
+    custo = custo_importacao_rs_t(bobina["preco_usd_t_publicado"], bobina["frete_usd_t"],
                                   bobina["seguro_usd_t"], cambio, ParamsIPIA())
     trimestral = carregar_preco_domestico_trimestral()
     blend = preco_domestico_ponderado(trimestral)
@@ -907,6 +945,30 @@ def selftest() -> int:
     check("mes de volume muito baixo recebe peso proximo de zero",
           peso.iloc[2] < 0.02,
           f"peso calculado = {peso.iloc[2]:.4f}")
+
+    # --- 8d. suavizacao seletiva: so meses de peso reduzido sao suavizados --
+    idx_suav = pd.date_range("2021-01-01", periods=5, freq="MS")
+    df_suav = pd.DataFrame({
+        "preco_usd_t":         [1000.0, 1082.0, 1100.0, 600.0, 650.0],
+        "peso_confiabilidade": [1.0,    1.0,    1.0,    0.011, 1.0],
+    }, index=idx_suav)
+    suav = suavizar_preco_importacao(df_suav)
+    # caso 1: mes de peso PLENO (ex.: pico de supercycle, poucos parceiros
+    # mas volume alto) mantem o publicado IDENTICO ao bruto, mesmo cercado
+    # por vizinhos de preco bem diferente.
+    check("mes de peso pleno mantem preco_usd_t_publicado identico ao bruto (nunca suaviza peso pleno)",
+          abs(float(suav["preco_usd_t_publicado"].iloc[1]) - float(suav["preco_usd_t"].iloc[1])) < 1e-9
+          and not bool(suav["suavizado"].iloc[1]))
+    # caso 2: mes de peso reduzido recebe a media movel centrada de 3 (janela
+    # em torno do indice 3: indices 2,3,4 = 1100, 600, 650) - e o bruto (600)
+    # continua intocado na coluna preco_usd_t, disponivel para auditoria.
+    esperado_suav = (1100.0 + 600.0 + 650.0) / 3
+    check("mes de peso reduzido recebe media movel centrada de 3 meses no publicado",
+          abs(float(suav["preco_usd_t_publicado"].iloc[3]) - esperado_suav) < 1e-6
+          and bool(suav["suavizado"].iloc[3]),
+          f"publicado = {float(suav['preco_usd_t_publicado'].iloc[3]):.4f}, esperado = {esperado_suav:.4f}")
+    check("bruto (preco_usd_t) nunca e sobrescrito pela suavizacao",
+          abs(float(suav["preco_usd_t"].iloc[3]) - 600.0) < 1e-9)
 
     # --- 9. diagnostico de antecedencia detecta sinal plantado --------------
     base = _serie_sintetica(n=160, seed=7, ruido=0.5)

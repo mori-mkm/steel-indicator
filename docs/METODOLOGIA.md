@@ -40,7 +40,11 @@ chamam a mesma função.
 Implementado em `custo_importacao_rs_t(preco_fob_usd_t, frete_usd_t, seguro_usd_t, cambio, p: ParamsIPIA)`.
 
 Entrada: FOB, frete e seguro em US$/t (do Comex Stat, ver seção 3) e
-câmbio (BCB/SGS, série `cambio_venda`, PTAX). Sequência de cálculo:
+câmbio (BCB/SGS, série `cambio_venda`, PTAX). O FOB usado é
+`preco_usd_t_publicado` — a série **já com suavização seletiva aplicada**
+(ver seção 5.2) — não o `preco_usd_t` bruto; frete e seguro não são
+suavizados, entram brutos. Ver [ADR 0005](adr/0005-suavizacao-seletiva-preco-importacao.md)
+para o porquê dessa escolha. Sequência de cálculo:
 
 | Etapa | Fórmula | Coluna de saída |
 |---|---|---|
@@ -109,15 +113,16 @@ pequeno (ex. jun/2020: 55 t em 3 registros) é ruído de fato. Usar
 `n_registros` penalizaria exatamente os meses de maior conteúdo
 informativo do índice. Testado em `--selftest` (seção 8c): dois meses
 com o mesmo `n_registros` mas volumes muito diferentes recebem pesos
-diferentes.
+diferentes. Esse mesmo peso também decide quais meses são suavizados
+(seção 5.2 abaixo) — um pico de supercycle de peso pleno nunca é
+suavizado, mesmo com poucos registros.
 
-## 5. Tratamento de meses faltantes
+## 5. Tratamento de meses faltantes e de baixo volume
 
-Não existe uma etapa de "suavização" (média móvel, EWMA etc.) no código
-hoje — só dois tratamentos distintos, cada um do seu lado do cálculo,
+Três tratamentos distintos, cada um resolvendo um problema diferente,
 nunca aplicados ao mesmo dado:
 
-### 5.1 Lado da importação — interpolação linear (`serie_mensal_preco_bobina`)
+### 5.1 Lado da importação — interpolação linear de meses faltantes (`serie_mensal_preco_bobina`)
 Quando um mês não tem nenhum registro no Comex Stat, `preco_usd_t`,
 `frete_usd_t`, `seguro_usd_t` e `toneladas` são preenchidos por
 interpolação linear entre os meses vizinhos (`pandas.interpolate(method="linear")`).
@@ -128,7 +133,30 @@ interpolado por acaso caia acima do limiar. Documentado no código como
 "provisório — o ideal é investigar por que o mês ficou sem dado antes de
 publicar de verdade".
 
-### 5.2 Lado doméstico — encadeamento via IPP, com hold-flat como fallback (`encadear_preco_domestico_mensal`)
+### 5.2 Lado da importação — suavização seletiva de meses de baixo volume (`suavizar_preco_importacao`)
+Diferente da interpolação (que preenche meses **sem nenhum dado**), a
+suavização seletiva reduz o ruído de meses que **têm** dado mas com
+volume abaixo do mínimo (`peso_confiabilidade < 1.0`, ver seção 4):
+
+```
+preco_usd_t_publicado = media_movel_centrada_3_meses(preco_usd_t)   se peso_confiabilidade < 1.0
+preco_usd_t_publicado = preco_usd_t                                 se peso_confiabilidade == 1.0 (nunca suaviza)
+```
+
+`rolling(window=3, center=True, min_periods=1)` sobre `preco_usd_t`. O
+bruto (`preco_usd_t`) **nunca é sobrescrito** — fica sempre disponível
+para auditoria — e a coluna booleana `suavizado` marca em quais meses o
+publicado difere do bruto. Frete e seguro não são suavizados (só o
+preço). É `preco_usd_t_publicado`, não o bruto, que alimenta
+`custo_importacao_rs_t` dentro de `calcular_ipia_mensal` — ver
+[ADR 0005](adr/0005-suavizacao-seletiva-preco-importacao.md) para essa
+escolha e o porquê de não deixar as duas colunas coexistindo sem uma
+sendo efetivamente usada no cálculo publicado. Testado em `--selftest`
+(seção 8d): um mês de peso pleno (mesmo com poucos registros) mantém o
+publicado idêntico ao bruto; um mês de peso reduzido recebe a média
+móvel.
+
+### 5.3 Lado doméstico — encadeamento via IPP, com hold-flat como fallback (`encadear_preco_domestico_mensal`)
 Diferente da importação, aqui **não se usa interpolação linear** — o
 motivo é look-ahead bias, explicado em detalhe no
 [ADR 0002](adr/0002-encadeamento-trimestre-mes-via-ipp.md). Resumo
@@ -150,8 +178,10 @@ técnico do método:
 Cada mês da série de saída carrega o `metodo` usado, nunca escondido.
 
 **Quando cada um se aplica, resumido**: interpolação linear é sempre
-lado-importação e só para buracos pontuais dentro de uma série mensal
-já disponível via API; encadeamento IPP/hold-flat é sempre lado-doméstico
+lado-importação e só para buracos pontuais (mês sem nenhum registro)
+dentro de uma série mensal já disponível via API; suavização seletiva
+também é lado-importação, mas para meses que **têm** dado, só reduz o
+ruído de volume fino; encadeamento IPP/hold-flat é sempre lado-doméstico
 e serve para *expandir* um nível trimestral (a granularidade real da
 fonte) em pontos mensais, nunca para preencher buracos dentro do próprio
 CSV curado.
