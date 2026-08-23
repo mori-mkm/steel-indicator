@@ -31,8 +31,9 @@
    python indices_setoriais.py --check-sources   # testa as APIs publicas
    python indices_setoriais.py --iccs            # calcula o ICCS
    python indices_setoriais.py --ipia            # calcula o IPIA
+   python indices_setoriais.py --pdf-ipia        # gera relatorio PDF de 1 pagina do IPIA
 
- Dependencias: pandas, numpy, requests  (statsmodels opcional, p/ ajuste sazonal)
+ Dependencias: pandas, numpy, requests, matplotlib  (statsmodels opcional, p/ ajuste sazonal)
 =============================================================================
 """
 from __future__ import annotations
@@ -640,6 +641,122 @@ def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.Da
 
 
 
+def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFrame:
+    """Calcula o IPIA mensal completo: custo de importacao real (Comex Stat +
+    cambio BCB) contra a ancora de preco domestico (CSV curado + IPP).
+
+    Mesmo calculo usado pelo branch `--ipia` da CLI e pelo relatorio PDF
+    (`gerar_pdf_ipia`) - centralizado aqui para as duas saidas nunca
+    divergirem. Retorna as colunas: ipia, preco_domestico_rs_t, ppi_rs_t,
+    tipo_dado_domestico, metodo_domestico, peso_confiabilidade_importacao.
+    """
+    bobina = serie_mensal_preco_bobina(ano_ini, ano_fim)
+    if bobina.empty:
+        return bobina
+    bobina = bobina.set_index("data")
+    # cambio_venda (codigo 1, PTAX) e serie diaria - a API do BCB rejeita
+    # (406) janela de consulta acima de 10 anos para series diarias, entao
+    # o inicio e amarrado a ano_ini em vez do default de sgs() (2010),
+    # que sozinho ja estoura o limite a partir de 2020.
+    cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}").reindex(bobina.index, method="ffill")
+    custo = custo_importacao_rs_t(bobina["preco_usd_t"], bobina["frete_usd_t"],
+                                  bobina["seguro_usd_t"], cambio, ParamsIPIA())
+    trimestral = carregar_preco_domestico_trimestral()
+    blend = preco_domestico_ponderado(trimestral)
+    ipp = ibge_sidra_ipp_metalurgia()
+    domestico = encadear_preco_domestico_mensal(blend, ipp)
+    idx = bobina.index.intersection(domestico.index)
+    return pd.DataFrame({
+        "ipia": ipia(domestico.loc[idx, "preco_rs_t"], custo.loc[idx, "ppi_brl_t"]),
+        "preco_domestico_rs_t": domestico.loc[idx, "preco_rs_t"],
+        "ppi_rs_t": custo.loc[idx, "ppi_brl_t"],
+        "tipo_dado_domestico": domestico.loc[idx, "tipo_dado"],
+        "metodo_domestico": domestico.loc[idx, "metodo"],
+        "peso_confiabilidade_importacao": bobina.loc[idx, "peso_confiabilidade"],
+    })
+
+# =============================================================================
+# 5. RELATORIO / VISUALIZACAO (PDF)
+# =============================================================================
+
+def gerar_pdf_ipia(df: pd.DataFrame, caminho_pdf: str, params: ParamsIPIA,
+                   data_geracao: Optional[dt.datetime] = None) -> None:
+    """Pagina unica em PDF com a serie do IPIA ja calculada.
+
+    So visualiza - nao recalcula nem busca dado novo, tudo vem do
+    DataFrame recebido (ver `calcular_ipia_mensal`). "Penetracao de
+    importacao" nao tem coletor implementado hoje (so existe como entrada
+    de spec do ICCS) - por isso aparece como "nao disponivel" no painel,
+    nunca como numero inventado.
+    """
+    import textwrap
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    if df.empty:
+        raise ValueError("DataFrame do IPIA vazio - nada para plotar")
+    data_geracao = data_geracao or dt.datetime.now()
+    ultimo = df.iloc[-1]
+    spread_rs = ultimo["preco_domestico_rs_t"] - ultimo["ppi_rs_t"]
+
+    fig = plt.figure(figsize=(8.27, 11.69))  # A4 retrato
+    fig.suptitle("IPIA — Índice de Paridade de Importação do Aço",
+                 fontsize=16, fontweight="bold", y=0.97)
+    fig.text(0.5, 0.945, f"Gerado em {data_geracao:%d/%m/%Y %H:%M}",
+             ha="center", fontsize=9, color="dimgray")
+
+    # --- grafico da serie historica -----------------------------------------
+    ax = fig.add_axes((0.10, 0.68, 0.85, 0.22))
+    ax.plot(df.index, df["ipia"], marker="o", color="#1f4e79")
+    ax.axhline(100, linestyle="--", color="gray", linewidth=1)
+    ax.set_ylabel("IPIA (100 = paridade)")
+    ax.set_title("Série histórica", fontsize=11, loc="left")
+    ax.grid(alpha=0.3)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b/%y"))
+    ax.tick_params(axis="x", labelsize=8)
+
+    # --- painel com os numeros mais recentes ---------------------------------
+    linhas_painel = [
+        f"IPIA atual ({df.index[-1]:%b/%Y}): {ultimo['ipia']:.1f}",
+        f"Preço doméstico: R$ {ultimo['preco_domestico_rs_t']:,.0f}/t",
+        f"Custo de importação (paridade): R$ {ultimo['ppi_rs_t']:,.0f}/t",
+        f"Spread doméstico vs. paridade: R$ {spread_rs:,.0f}/t ({ultimo['ipia'] - 100:+.1f} pts)",
+        "Penetração de importação: não disponível (sem coletor implementado)",
+    ]
+    ax_p = fig.add_axes((0.10, 0.50, 0.85, 0.12)); ax_p.axis("off")
+    ax_p.text(0, 1, "\n".join(linhas_painel), fontsize=10, va="top", family="monospace")
+
+    # --- ressalva de metodologia ---------------------------------------------
+    ressalva = textwrap.fill(
+        "RESSALVAS: preço doméstico é proxy do segmento \"Siderurgia\" "
+        "(Usiminas+CSN), não específico de bobina a quente (ver "
+        "docs/adr/0003). Antidumping ainda não confirmado "
+        f"(antidumping_usd_t={params.antidumping_usd_t:.1f}, default zerado ate confirmacao).",
+        width=90)
+    ax_r = fig.add_axes((0.10, 0.36, 0.85, 0.11)); ax_r.axis("off")
+    ax_r.text(0.02, 0.5, ressalva, fontsize=8.5, va="center",
+              bbox=dict(boxstyle="round", facecolor="#fff3cd", edgecolor="#856404"))
+
+    # --- rodape: fontes e metodologia -----------------------------------------
+    rodape = textwrap.fill(
+        "Fontes: Comex Stat (importação), BCB/SGS (câmbio), releases "
+        "trimestrais Usiminas/CSN (preço doméstico), IBGE/SIDRA IPP "
+        "metalurgia (encadeamento mensal). Metodologia: IPIA = preço "
+        "doméstico / custo de importação posto no cliente (CIF + II + "
+        "AFRMM + antidumping + despesas de porto + frete interno + "
+        "margem) × 100.", width=100)
+    fig.text(0.10, 0.26, rodape, fontsize=7, va="bottom", color="#444444")
+
+    import os
+    diretorio = os.path.dirname(caminho_pdf)
+    if diretorio:
+        os.makedirs(diretorio, exist_ok=True)
+    fig.savefig(caminho_pdf, format="pdf")
+    plt.close(fig)
+
+
 def _serie_sintetica(n=180, seed=0, tendencia=0.0, nivel=10.0, ruido=1.0):
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2012-01-01", periods=n, freq="MS")
@@ -910,6 +1027,27 @@ def selftest() -> int:
     check("integracao ancora domestica + custo de importacao nao quebra a aritmetica do ipia()",
           bool(((ix_rt - esperado_ix_rt).abs() < 1e-9).all()))
 
+    # --- 15. geracao de PDF do IPIA -----------------------------------------
+    idx_pdf = pd.date_range("2026-01-01", periods=6, freq="MS")
+    df_pdf = pd.DataFrame({
+        "ipia":                          [130.4, 142.6, 143.4, 139.3, 140.1, 134.0],
+        "preco_domestico_rs_t":          [5213.2, 5213.2, 5213.2, 4996.0, 4996.0, 4996.0],
+        "ppi_rs_t":                      [3996.8, 3655.7, 3636.0, 3586.3, 3567.2, 3727.9],
+        "tipo_dado_domestico":           ["proxy_segmento_aco"] * 6,
+        "metodo_domestico":              ["nivel_trimestral"] * 6,
+        "peso_confiabilidade_importacao":[1.0] * 6,
+    }, index=idx_pdf)
+    tmp_pdf_fd, tmp_pdf_path = tempfile.mkstemp(suffix=".pdf")
+    _os.close(tmp_pdf_fd)
+    try:
+        gerar_pdf_ipia(df_pdf, tmp_pdf_path, ParamsIPIA())
+        tamanho = _os.path.getsize(tmp_pdf_path)
+        check("PDF do IPIA e gerado sem erro e nao esta vazio",
+              _os.path.exists(tmp_pdf_path) and tamanho > 0,
+              f"tamanho = {tamanho} bytes")
+    finally:
+        _os.remove(tmp_pdf_path)
+
     print("-" * 74)
     if falhas:
         print(f" RESULTADO: {len(falhas)} FALHA(S): {falhas}")
@@ -974,6 +1112,8 @@ def main():
                      help="encadeia o preco domestico trimestral (data/curated/) em serie mensal via IPP/IBGE e salva em data/processed/")
     ap.add_argument("--ipia", action="store_true",
                      help="calcula o IPIA completo (custo de importacao + ancora domestica) e salva em data/processed/")
+    ap.add_argument("--pdf-ipia", action="store_true",
+                     help="calcula o IPIA e gera relatorio PDF de 1 pagina em data/processed/ipia_relatorio.pdf")
     ap.add_argument("--ano-ini", type=int, default=2020)
     ap.add_argument("--ano-fim", type=int, default=2026)
     a = ap.parse_args()
@@ -1009,37 +1149,28 @@ def main():
         sys.exit(0)
     if a.ipia:
         print(f"Calculando IPIA, {a.ano_ini}-{a.ano_fim} ...")
-        bobina = serie_mensal_preco_bobina(a.ano_ini, a.ano_fim)
-        if bobina.empty:
+        out = calcular_ipia_mensal(a.ano_ini, a.ano_fim)
+        if out.empty:
             print("Nenhum dado de importacao retornado - confira o periodo ou rode --check-sources primeiro.")
             sys.exit(1)
-        bobina = bobina.set_index("data")
-        # cambio_venda (codigo 1, PTAX) e serie diaria - a API do BCB rejeita
-        # (406) janela de consulta acima de 10 anos para series diarias, entao
-        # o inicio e amarrado a --ano-ini em vez do default de sgs() (2010),
-        # que sozinho ja estoura o limite a partir de 2020.
-        cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{a.ano_ini}").reindex(bobina.index, method="ffill")
-        custo = custo_importacao_rs_t(bobina["preco_usd_t"], bobina["frete_usd_t"],
-                                      bobina["seguro_usd_t"], cambio, ParamsIPIA())
-        trimestral = carregar_preco_domestico_trimestral()
-        blend = preco_domestico_ponderado(trimestral)
-        ipp = ibge_sidra_ipp_metalurgia()
-        domestico = encadear_preco_domestico_mensal(blend, ipp)
-        idx = bobina.index.intersection(domestico.index)
-        out = pd.DataFrame({
-            "ipia": ipia(domestico.loc[idx, "preco_rs_t"], custo.loc[idx, "ppi_brl_t"]),
-            "preco_domestico_rs_t": domestico.loc[idx, "preco_rs_t"],
-            "ppi_rs_t": custo.loc[idx, "ppi_brl_t"],
-            "tipo_dado_domestico": domestico.loc[idx, "tipo_dado"],
-            "metodo_domestico": domestico.loc[idx, "metodo"],
-            "peso_confiabilidade_importacao": bobina.loc[idx, "peso_confiabilidade"],
-        })
         print(out.to_string())
         import os
         os.makedirs("data/processed", exist_ok=True)
         caminho = "data/processed/ipia_mensal.csv"
         out.to_csv(caminho)
         print(f"\nSalvo em {caminho} ({len(out)} meses)")
+        sys.exit(0)
+    if a.pdf_ipia:
+        print(f"Calculando IPIA para relatorio PDF, {a.ano_ini}-{a.ano_fim} ...")
+        out = calcular_ipia_mensal(a.ano_ini, a.ano_fim)
+        if out.empty:
+            print("Nenhum dado de importacao retornado - confira o periodo ou rode --check-sources primeiro.")
+            sys.exit(1)
+        import os
+        os.makedirs("data/processed", exist_ok=True)
+        caminho = "data/processed/ipia_relatorio.pdf"
+        gerar_pdf_ipia(out, caminho, ParamsIPIA())
+        print(f"Relatorio salvo em {caminho} ({len(out)} meses na serie)")
         sys.exit(0)
     if a.spec:
         ICCS.validar()
