@@ -327,7 +327,6 @@ class ParamsIPIA:
     despesas_porto_rs_t: float = 210.0  # capatazia, armazenagem, despacho
     frete_interno_rs_t: float = 140.0   # porto -> cliente
     margem_importador: float = 0.03     # margem do trading
-    icms_credito: bool = True           # se o comprador credita ICMS
     antidumping_usd_t: float = 0.0      # direito especifico, US$/t - VARIA POR
         # EMPRESA EXPORTADORA E POR ORIGEM (China, Russia...) nas resolucoes
         # Gecex. Default 0 CONFIRMADO COMO PENDENTE em 23/08/2026 (pesquisado,

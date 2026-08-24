@@ -67,8 +67,9 @@ com os defaults atuais:
 | `despesas_porto_rs_t` | R$ 210,00/t | Capatazia, armazenagem, despacho |
 | `frete_interno_rs_t` | R$ 140,00/t | Porto → cliente |
 | `margem_importador` | 0.03 | Margem da trading/importador |
-| `icms_credito` | `True` | **Declarado mas não usado** em `custo_importacao_rs_t` hoje — nenhum efeito no cálculo atual. Ver seção 8 (limitações). |
 | `antidumping_usd_t` | 0.0 | Direito específico em US$/t. Zerado por padrão — status para bobina a quente da China não confirmado como definitivo na última checagem (ver seção 8). |
+
+O índice **não modela ICMS de importação** — ver seção 8 (limitações) para a razão econômica dessa decisão (removido o campo `icms_credito`, que existia sem nenhum efeito no cálculo; ver [ADR 0006](adr/0006-remocao-icms-credito-campo-morto.md)).
 
 ## 3. NCMs de bobina a quente (`NCM_BOBINA_QUENTE`)
 
@@ -277,10 +278,24 @@ hoje é "segmento", não "produto".
   status numa data específica, que precisa ser rechecado periodicamente
   (não só confirmado uma vez) em gov.br/mdic/.../defesa-comercial antes
   de cada publicação.
-- **`icms_credito` declarado mas não usado**: campo existe em
-  `ParamsIPIA` mas `custo_importacao_rs_t` não o referencia em nenhum
-  lugar — hoje não tem efeito no cálculo, é só um campo informativo à
-  espera de ser incorporado.
+- **Índice não modela ICMS de importação (decisão de 23/08/2026)**: o
+  campo `icms_credito` que existia em `ParamsIPIA` foi **removido** —
+  era código morto (declarado, nunca lido por `custo_importacao_rs_t`),
+  não a implementação de uma premissa deliberada. A decisão tomada agora
+  é não modelar ICMS por enquanto, pela seguinte razão econômica: o
+  público-alvo típico do IPIA (importador que revende — distribuidor,
+  trading, siderúrgica) normalmente credita o ICMS pago na importação na
+  cadeia normal do negócio, então o efeito do imposto é majoritariamente
+  de **caixa** (timing), não custo econômico líquido, para esse perfil.
+  **Isso precisa ser revisitado** se o índice precisar servir um perfil
+  de comprador que não credita (ex.: consumidor final, empresa em regime
+  que não credita) — nesse caso ICMS vira custo real e a paridade
+  calculada hoje subestima o custo de importação para esse comprador.
+  Ver [ADR 0006](adr/0006-remocao-icms-credito-campo-morto.md) para as
+  alternativas consideradas (implementar de verdade exigiria levantar a
+  alíquota de ICMS-importação por estado/regime — pendência de dado
+  ainda não investigada — e resolver o cálculo "por dentro" do imposto,
+  estruturalmente diferente das demais linhas de custo).
 - **NCMs não reconfirmados no Siscomex**: a lista em `NCM_BOBINA_QUENTE`
   vem da leitura da Circular SECEX 39/2025; o próprio comentário no
   código pede confirmação adicional no Siscomex antes do primeiro
