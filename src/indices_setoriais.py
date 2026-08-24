@@ -1051,6 +1051,21 @@ def selftest() -> int:
     check("trimestre com tipos diferentes entre empresas vira 'misto' (nunca finge especifico)",
           blend_misto["tipo"].iloc[0] == "misto", f"tipo = {blend_misto['tipo'].iloc[0]}")
 
+    # --- 12b. cobertura real do CSV curado: trimestres com AS DUAS empresas -
+    # Diferente dos testes acima (dado sintetico), esta checagem le o CSV
+    # curado de verdade (CAMINHO_PRECO_DOMESTICO_CSV) e garante que o blend
+    # ponderado por volume nao seja, na pratica, sempre uma empresa isolada
+    # disfarcada de blend (ver docs/adr/0001). Piso de 4 reflete a cobertura
+    # curada ate agora (2025Q2, 2025Q3, 2025Q4, 2026Q2) - suba este numero
+    # conforme mais trimestres forem adicionados ao CSV, nao antes.
+    COBERTURA_DUPLA_MINIMA = 4
+    csv_real = carregar_preco_domestico_trimestral()
+    n_empresas_por_trimestre = csv_real.groupby("trimestre")["empresa"].nunique()
+    trimestres_com_ambas = n_empresas_por_trimestre[n_empresas_por_trimestre >= 2]
+    check(f"CSV curado tem pelo menos {COBERTURA_DUPLA_MINIMA} trimestres com Usiminas E CSN simultaneamente",
+          len(trimestres_com_ambas) >= COBERTURA_DUPLA_MINIMA,
+          f"{len(trimestres_com_ambas)} trimestre(s) com blend real: {sorted(trimestres_com_ambas.index.tolist())}")
+
     # --- 13. ancora de preco domestico: encadeamento mensal via IPP ---------
     # So 2026Q1 esta "confirmado" (so ele esta no CSV trimestral) - abr/mai/jun
     # ainda nao tem release, entao precisam ser projetados mes a mes pelo IPP.

@@ -259,10 +259,13 @@ hoje é "segmento", não "produto".
   investigados (ver ADR 0003). O IPIA calculado hoje é, formalmente, um
   índice de paridade para o segmento de aço das duas empresas usado como
   proxy — não um IPIA de bobina a quente puro.
-- **Cobertura histórica curta do dado doméstico**: só dois trimestres
-  carregados no CSV curado (2026Q1 Usiminas, 2026Q2 CSN) — e não são a
-  mesma janela temporal para as duas empresas (ver ADR 0001). Todo o
-  histórico anterior a 2026Q1 depende de curadoria futura.
+- **Cobertura histórica do dado doméstico**: 9 registros trimestrais no
+  CSV curado, dos quais **4 trimestres têm Usiminas E CSN
+  simultaneamente** (2025Q2, 2025Q3, 2025Q4, 2026Q2 — validado em
+  `--selftest`) e portanto um blend ponderado real; 2026Q1 segue só com
+  Usiminas (release da CSN para 1T26 não localizado, ver ADR 0001 para a
+  investigação completa). 2023Q1–2025Q1 (9 trimestres) e o período
+  anterior a 2023 seguem como pendência de curadoria futura.
 - **Antidumping confirmado como pendente em 23/08/2026**:
   `antidumping_usd_t=0.0` por padrão. Checagem feita via pesquisa (não
   suposição) nessa data: cold-rolled (Resolução Gecex 854) e revestido
