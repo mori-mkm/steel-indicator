@@ -330,11 +330,17 @@ class ParamsIPIA:
     icms_credito: bool = True           # se o comprador credita ICMS
     antidumping_usd_t: float = 0.0      # direito especifico, US$/t - VARIA POR
         # EMPRESA EXPORTADORA E POR ORIGEM (China, Russia...) nas resolucoes
-        # Gecex. Default 0 porque o status para bobina a quente da China nao
-        # estava confirmado como definitivo na ultima checagem (verifique em
-        # gov.br/mdic/.../defesa-comercial antes de calibrar). Ao confirmar,
-        # trate como parametro versionado igual aos demais - nao como uma
-        # constante do codigo.
+        # Gecex. Default 0 CONFIRMADO COMO PENDENTE em 23/08/2026 (pesquisado,
+        # nao apenas assumido): cold-rolled (Resolucao Gecex 854) e revestido
+        # (856) foram decididos em 12/02/2026, mas laminado a quente da China
+        # NAO aparece em nenhuma resolucao Gecex ate a de numero 947
+        # (04/08/2026, ultima verificada nesta checagem). Duas datas de
+        # expectativa ja passaram sem decisao (fev-mar/2026 segundo imprensa,
+        # jul/2026 segundo a propria Usiminas no release do 1T26). Isso NAO e
+        # um fato permanente - reverifique periodicamente em
+        # gov.br/mdic/.../defesa-comercial antes de cada publicacao, nao so
+        # na primeira vez. Ao confirmar uma decisao, trate como parametro
+        # versionado igual aos demais - nao como uma constante do codigo.
 
 
 def custo_importacao_rs_t(preco_fob_usd_t: pd.Series,

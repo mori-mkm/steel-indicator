@@ -263,10 +263,17 @@ hoje é "segmento", não "produto".
   carregados no CSV curado (2026Q1 Usiminas, 2026Q2 CSN) — e não são a
   mesma janela temporal para as duas empresas (ver ADR 0001). Todo o
   histórico anterior a 2026Q1 depende de curadoria futura.
-- **Antidumping não confirmado**: `antidumping_usd_t=0.0` por padrão.
-  Status definitivo para laminado a quente da China (esperado
-  jul/2026) não estava confirmado como definitivo na última checagem.
-  Confirmar em gov.br/mdic/.../defesa-comercial antes de calibrar.
+- **Antidumping confirmado como pendente em 23/08/2026**:
+  `antidumping_usd_t=0.0` por padrão. Checagem feita via pesquisa (não
+  suposição) nessa data: cold-rolled (Resolução Gecex 854) e revestido
+  (856) foram decididos em 12/02/2026, mas laminado a quente da China
+  **não aparece em nenhuma resolução Gecex** até a de número 947
+  (04/08/2026, última verificada). Duas datas de expectativa já passaram
+  sem decisão (fev-mar/2026 segundo imprensa, jul/2026 segundo a própria
+  Usiminas no release do 1T26). Isso **não é um fato permanente** — é o
+  status numa data específica, que precisa ser rechecado periodicamente
+  (não só confirmado uma vez) em gov.br/mdic/.../defesa-comercial antes
+  de cada publicação.
 - **`icms_credito` declarado mas não usado**: campo existe em
   `ParamsIPIA` mas `custo_importacao_rs_t` não o referencia em nenhum
   lugar — hoje não tem efeito no cálculo, é só um campo informativo à
