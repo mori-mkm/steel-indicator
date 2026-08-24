@@ -54,6 +54,12 @@ ESCALA_A   = 50.0                           # ancora: 50 = media da janela de re
 ESCALA_B   = 10.0                           # 1 desvio-padrao = 10 pontos
 COBERTURA_MINIMA = 0.60                     # abaixo disso, nao publique o setor
 
+VERSAO_METODOLOGIA = "1.1"  # bump manual quando a metodologia de calculo mudar
+# (nao a cada commit) - referenciada em docs/METODOLOGIA.md e no painel
+# "Report Information" do relatorio PDF. 1.0 = motor inicial do IPIA;
+# 1.1 = suavizacao seletiva (ADR 0005) + taxa de penetracao de importacao
+# (ADR 0007).
+
 # --- Series SGS do Banco Central -------------------------------------------
 # VERIFICADAS AO VIVO nesta sessao (valores de jun/2026 conferidos):
 #   21082 -> 4,68  | inadimplencia total do SFN        (bate com o divulgado)
@@ -817,6 +823,16 @@ def comex_importacao_ncm(ncm: List[str], ano_ini: int, ano_fim: int) -> pd.DataF
     lista = dados.get("data", {}).get("list", [])
     return pd.DataFrame(lista)
 
+def _comex_bobina_bruto(ano_ini: int, ano_fim: int) -> pd.DataFrame:
+    """Busca o dado bruto de importacao (Comex Stat) dos 13 NCMs de bobina
+    a quente - extraido de `serie_mensal_preco_bobina` para poder ser
+    reaproveitado por outras agregacoes (ex.: `origem_importacao_bobina_por_pais`)
+    sem fazer uma segunda chamada de rede para o mesmo dado.
+    """
+    ncms = sorted(sum(NCM_BOBINA_QUENTE.values(), []))
+    return comex_importacao_ncm(ncms, ano_ini, ano_fim)
+
+
 VOLUME_MINIMO_T = 5000.0  # abaixo disso, peso de confiabilidade cai linearmente ate 0
 # Por que volume e nao numero de registros: um mes com poucos parceiros
 # comerciais mas volume grande (ex. set/2021, pico do supercycle: 27 mil t
@@ -851,7 +867,8 @@ def suavizar_preco_importacao(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFrame:
+def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026,
+                              df_bruto: pd.DataFrame | None = None) -> pd.DataFrame:
     """Serie mensal de preco unitario de importacao (USD/t) para os 13 NCMs de
     bobina a quente, ponderado por volume (soma FOB / soma KG de todos os NCMs
     e paises no mes - nao e media simples entre NCMs, e um preco medio real
@@ -873,9 +890,12 @@ def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.Da
     soma do mes / soma de KG do mes) - sao os insumos que `custo_importacao_rs_t`
     precisa alem do FOB para montar o CIF. Nao sao suavizados - a suavizacao
     seletiva se aplica so ao preco (ver docs/METODOLOGIA.md secao 5).
+
+    df_bruto aceita o dado ja buscado por `_comex_bobina_bruto` (evita nova
+    chamada de rede quando outra agregacao - ex. por pais de origem -
+    precisa do mesmo dado bruto) - se None, busca ao vivo.
     """
-    ncms = sorted(sum(NCM_BOBINA_QUENTE.values(), []))
-    df = comex_importacao_ncm(ncms, ano_ini, ano_fim)
+    df = df_bruto if df_bruto is not None else _comex_bobina_bruto(ano_ini, ano_fim)
     if df.empty:
         return df
     for col in ("metricFOB", "metricKG", "metricFreight", "metricInsurance"):
@@ -909,6 +929,39 @@ def serie_mensal_preco_bobina(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.Da
     return completa.reset_index()
 
 
+def origem_importacao_bobina_por_pais(ano_ini: int = 2020, ano_fim: int = 2026,
+                                       df_bruto: pd.DataFrame | None = None,
+                                       ultimos_n_meses: int = 3) -> pd.DataFrame:
+    """Top paises de origem da importacao de bobina a quente, como % do
+    volume (KG) total, nos ultimos `ultimos_n_meses` meses com dado
+    disponivel no Comex Stat.
+
+    Reaproveita o campo `country` que a resposta do Comex Stat ja traz
+    (confirmado ao vivo: nome do pais em texto, ex. "Coreia do Sul",
+    "Egito" - nao um codigo) mas que `serie_mensal_preco_bobina` descarta
+    na agregacao por mes. df_bruto aceita o mesmo dado ja buscado por
+    `_comex_bobina_bruto`/`serie_mensal_preco_bobina` - se None, busca
+    ao vivo (nunca duas chamadas de rede para o mesmo dado dentro do
+    relatorio).
+    """
+    df = df_bruto if df_bruto is not None else _comex_bobina_bruto(ano_ini, ano_fim)
+    if df.empty:
+        return df
+    df = df.copy()
+    df["metricKG"] = pd.to_numeric(df["metricKG"], errors="coerce")
+    df["data"] = pd.to_datetime(df["year"].astype(str) + "-"
+                                + df["monthNumber"].astype(str).str.zfill(2) + "-01")
+    meses_recentes = sorted(df["data"].unique())[-ultimos_n_meses:]
+    recorte = df[df["data"].isin(meses_recentes)]
+    por_pais = recorte.groupby("country")["metricKG"].sum().sort_values(ascending=False)
+    total = por_pais.sum()
+    out = pd.DataFrame({
+        "toneladas": por_pais / 1000,
+        "pct_do_volume": (por_pais / total * 100.0) if total > 0 else 0.0,
+    })
+    out.attrs["mes_inicio"] = min(meses_recentes) if len(meses_recentes) else None
+    out.attrs["mes_fim"] = max(meses_recentes) if len(meses_recentes) else None
+    return out
 
 
 def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFrame:
@@ -916,7 +969,7 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFra
     cambio BCB) contra a ancora de preco domestico (CSV curado + IPP).
 
     Mesmo calculo usado pelo branch `--ipia` da CLI e pelo relatorio PDF
-    (`gerar_pdf_ipia`) - centralizado aqui para as duas saidas nunca
+    (`src/reporting/`) - centralizado aqui para as duas saidas nunca
     divergirem. Retorna as colunas: ipia, preco_domestico_rs_t, ppi_rs_t,
     tipo_dado_domestico, metodo_domestico, peso_confiabilidade_importacao.
     """
@@ -957,96 +1010,53 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFra
         "tipo_dado_penetracao": penetracao["tipo_dado_penetracao"].reindex(idx),
     })
 
-# =============================================================================
-# 5. RELATORIO / VISUALIZACAO (PDF)
-# =============================================================================
 
-def gerar_pdf_ipia(df: pd.DataFrame, caminho_pdf: str, params: ParamsIPIA,
-                   data_geracao: Optional[dt.datetime] = None) -> None:
-    """Pagina unica em PDF com a serie do IPIA ja calculada.
+def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
+                                       df_bruto: pd.DataFrame | None = None,
+                                       params: ParamsIPIA | None = None) -> pd.DataFrame:
+    """Mesmo dado de entrada de `calcular_ipia_mensal` (bobina + cambio),
+    mas devolve o DETALHAMENTO completo do custo de importacao - o que
+    `custo_importacao_rs_t` ja calcula mas `calcular_ipia_mensal` descarta
+    fora do total (`ppi_rs_t`). Nenhuma formula nova - so expoe o que ja
+    existe, para o relatorio PDF (decomposicao de custo) usar sem
+    recalcular nada.
 
-    So visualiza - nao recalcula nem busca dado novo, tudo vem do
-    DataFrame recebido (ver `calcular_ipia_mensal`). "Penetracao de
-    importacao" (Planos, Aco Brasil - ver docs/adr/0007) mostra o numero
-    real quando o mes mais recente do DataFrame tiver dado; se o mes nao
-    tiver (nem oficial nem aproximado ainda disponivel), mostra "nao
-    disponivel" - nunca um numero inventado para preencher a lacuna.
+    Colunas: fob_usd_t, frete_usd_t, seguro_usd_t, cambio, cif_brl_t,
+    ii_brl_t, afrmm_brl_t, antidumping_brl_t, despesas_porto_rs_t,
+    frete_interno_rs_t (as duas ultimas sao constantes de ParamsIPIA,
+    repetidas por linha para facilitar o uso no relatorio), margem_rs_t
+    (=ppi_brl_t - base; a margem e multiplicativa sobre a base, entao o
+    "componente" dela na decomposicao e essa diferenca, nao uma fracao
+    fixa) e ppi_brl_t (custo de internacao total).
+
+    df_bruto aceita o dado bruto do Comex Stat ja buscado (evita nova
+    chamada de rede quando chamado junto de `origem_importacao_bobina_por_pais`
+    no mesmo relatorio) - se None, busca ao vivo.
     """
-    import textwrap
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-
-    if df.empty:
-        raise ValueError("DataFrame do IPIA vazio - nada para plotar")
-    data_geracao = data_geracao or dt.datetime.now()
-    ultimo = df.iloc[-1]
-    spread_rs = ultimo["preco_domestico_rs_t"] - ultimo["ppi_rs_t"]
-
-    fig = plt.figure(figsize=(8.27, 11.69))  # A4 retrato
-    fig.suptitle("IPIA — Índice de Paridade de Importação do Aço",
-                 fontsize=16, fontweight="bold", y=0.97)
-    fig.text(0.5, 0.945, f"Gerado em {data_geracao:%d/%m/%Y %H:%M}",
-             ha="center", fontsize=9, color="dimgray")
-
-    # --- grafico da serie historica -----------------------------------------
-    ax = fig.add_axes((0.10, 0.68, 0.85, 0.22))
-    ax.plot(df.index, df["ipia"], marker="o", color="#1f4e79")
-    ax.axhline(100, linestyle="--", color="gray", linewidth=1)
-    ax.set_ylabel("IPIA (100 = paridade)")
-    ax.set_title("Série histórica", fontsize=11, loc="left")
-    ax.grid(alpha=0.3)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b/%y"))
-    ax.tick_params(axis="x", labelsize=8)
-
-    # --- painel com os numeros mais recentes ---------------------------------
-    penet = ultimo.get("penetracao_importacao_planos_pct")
-    tipo_penet = ultimo.get("tipo_dado_penetracao")
-    if pd.notna(penet):
-        rotulo_penet = "oficial" if tipo_penet == "oficial_mensal" else "aproximado"
-        linha_penetracao = f"Penetração de importação (Planos, {rotulo_penet}): {penet:.1f}%"
-    else:
-        linha_penetracao = "Penetração de importação: não disponível para este mês"
-    linhas_painel = [
-        f"IPIA atual ({df.index[-1]:%b/%Y}): {ultimo['ipia']:.1f}",
-        f"Preço doméstico: R$ {ultimo['preco_domestico_rs_t']:,.0f}/t",
-        f"Custo de importação (paridade): R$ {ultimo['ppi_rs_t']:,.0f}/t",
-        f"Spread doméstico vs. paridade: R$ {spread_rs:,.0f}/t ({ultimo['ipia'] - 100:+.1f} pts)",
-        linha_penetracao,
-    ]
-    ax_p = fig.add_axes((0.10, 0.50, 0.85, 0.12)); ax_p.axis("off")
-    ax_p.text(0, 1, "\n".join(linhas_painel), fontsize=10, va="top", family="monospace")
-
-    # --- ressalva de metodologia ---------------------------------------------
-    ressalva = textwrap.fill(
-        "RESSALVAS: preço doméstico é proxy do segmento \"Siderurgia\" "
-        "(Usiminas+CSN), não específico de bobina a quente (ver "
-        "docs/adr/0003). Antidumping ainda não confirmado "
-        f"(antidumping_usd_t={params.antidumping_usd_t:.1f}, default zerado ate confirmacao).",
-        width=90)
-    ax_r = fig.add_axes((0.10, 0.36, 0.85, 0.11)); ax_r.axis("off")
-    ax_r.text(0.02, 0.5, ressalva, fontsize=8.5, va="center",
-              bbox=dict(boxstyle="round", facecolor="#fff3cd", edgecolor="#856404"))
-
-    # --- rodape: fontes e metodologia -----------------------------------------
-    rodape = textwrap.fill(
-        "Fontes: Comex Stat (importação), BCB/SGS (câmbio), releases "
-        "trimestrais Usiminas/CSN (preço doméstico), IBGE/SIDRA IPP "
-        "metalurgia (encadeamento mensal), Instituto Aço Brasil "
-        "(penetração de importação, Planos). Metodologia: IPIA = preço "
-        "doméstico / custo de importação posto no cliente (CIF + II + "
-        "AFRMM + antidumping + despesas de porto + frete interno + "
-        "margem) × 100.", width=100)
-    fig.text(0.10, 0.26, rodape, fontsize=7, va="bottom", color="#444444")
-
-    import os
-    diretorio = os.path.dirname(caminho_pdf)
-    if diretorio:
-        os.makedirs(diretorio, exist_ok=True)
-    fig.savefig(caminho_pdf, format="pdf")
-    plt.close(fig)
-
+    p = params or ParamsIPIA()
+    bobina = serie_mensal_preco_bobina(ano_ini, ano_fim, df_bruto=df_bruto)
+    if bobina.empty:
+        return bobina
+    bobina = bobina.set_index("data")
+    cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}").reindex(bobina.index, method="ffill")
+    custo = custo_importacao_rs_t(bobina["preco_usd_t_publicado"], bobina["frete_usd_t"],
+                                  bobina["seguro_usd_t"], cambio, p)
+    base = custo["cif_brl_t"] + custo["ii_brl_t"] + custo["afrmm_brl_t"] + custo["antidumping_brl_t"] \
+         + p.despesas_porto_rs_t + p.frete_interno_rs_t
+    return pd.DataFrame({
+        "fob_usd_t": bobina["preco_usd_t_publicado"],
+        "frete_usd_t": bobina["frete_usd_t"],
+        "seguro_usd_t": bobina["seguro_usd_t"],
+        "cambio": cambio,
+        "cif_brl_t": custo["cif_brl_t"],
+        "ii_brl_t": custo["ii_brl_t"],
+        "afrmm_brl_t": custo["afrmm_brl_t"],
+        "antidumping_brl_t": custo["antidumping_brl_t"],
+        "despesas_porto_rs_t": p.despesas_porto_rs_t,
+        "frete_interno_rs_t": p.frete_interno_rs_t,
+        "margem_rs_t": custo["ppi_brl_t"] - base,
+        "ppi_brl_t": custo["ppi_brl_t"],
+    })
 
 def _serie_sintetica(n=180, seed=0, tendencia=0.0, nivel=10.0, ruido=1.0):
     rng = np.random.default_rng(seed)
@@ -1357,9 +1367,10 @@ def selftest() -> int:
     check("integracao ancora domestica + custo de importacao nao quebra a aritmetica do ipia()",
           bool(((ix_rt - esperado_ix_rt).abs() < 1e-9).all()))
 
-    # --- 15. geracao de PDF do IPIA -----------------------------------------
+    # --- 15. geracao do relatorio PDF do IPIA (3 paginas, src/reporting/) ---
+    from reporting.report_builder import gerar_relatorio_ipia
     idx_pdf = pd.date_range("2026-01-01", periods=6, freq="MS")
-    df_pdf = pd.DataFrame({
+    df_ipia_pdf = pd.DataFrame({
         "ipia":                          [130.4, 142.6, 143.4, 139.3, 140.1, 134.0],
         "preco_domestico_rs_t":          [5213.2, 5213.2, 5213.2, 4996.0, 4996.0, 4996.0],
         "ppi_rs_t":                      [3996.8, 3655.7, 3636.0, 3586.3, 3567.2, 3727.9],
@@ -1369,14 +1380,35 @@ def selftest() -> int:
         "penetracao_importacao_planos_pct": [24.1, 20.2, 18.5, 17.9, np.nan, 17.9],
         "tipo_dado_penetracao":          ["aproximado_consumo_aparente"] * 4 + [np.nan, "oficial_mensal"],
     }, index=idx_pdf)
+    df_custo_pdf = pd.DataFrame({
+        "fob_usd_t":          [620.0, 615.0, 610.0, 605.0, 600.0, 598.0],
+        "frete_usd_t":        [45.0] * 6,
+        "seguro_usd_t":       [4.0] * 6,
+        "cambio":             [5.10, 5.15, 5.20, 5.18, 5.22, 5.19],
+        "cif_brl_t":          [3415.0, 3410.0, 3400.0, 3385.0, 3380.0, 3360.0],
+        "ii_brl_t":           [368.9, 368.3, 367.2, 365.6, 365.0, 362.9],
+        "afrmm_brl_t":        [18.4, 18.5, 18.7, 18.6, 18.8, 18.7],
+        "antidumping_brl_t":  [0.0] * 6,
+        "despesas_porto_rs_t":[210.0] * 6,
+        "frete_interno_rs_t": [140.0] * 6,
+        "margem_rs_t":        [125.0, 124.6, 123.6, 122.7, 122.6, 121.7],
+        "ppi_brl_t":          [3996.8, 3655.7, 3636.0, 3586.3, 3567.2, 3727.9],
+    }, index=idx_pdf)
+    df_origem_pdf = pd.DataFrame({
+        "toneladas":     [45000.0, 22000.0, 12000.0, 8000.0, 3000.0],
+        "pct_do_volume": [50.0, 24.4, 13.3, 8.9, 3.3],
+    }, index=pd.Index(["China", "Coreia do Sul", "Egito", "Vietna", "India"], name="country"))
+    df_origem_pdf.attrs["mes_inicio"] = idx_pdf[-3]
+    df_origem_pdf.attrs["mes_fim"] = idx_pdf[-1]
     tmp_pdf_fd, tmp_pdf_path = tempfile.mkstemp(suffix=".pdf")
     _os.close(tmp_pdf_fd)
     try:
-        gerar_pdf_ipia(df_pdf, tmp_pdf_path, ParamsIPIA())
+        n_meses = gerar_relatorio_ipia(tmp_pdf_path, df_ipia=df_ipia_pdf,
+                                       df_custo=df_custo_pdf, df_origem=df_origem_pdf)
         tamanho = _os.path.getsize(tmp_pdf_path)
-        check("PDF do IPIA e gerado sem erro e nao esta vazio",
-              _os.path.exists(tmp_pdf_path) and tamanho > 0,
-              f"tamanho = {tamanho} bytes")
+        check("relatorio PDF do IPIA (3 paginas) e gerado sem erro e nao esta vazio",
+              _os.path.exists(tmp_pdf_path) and tamanho > 0 and n_meses == 6,
+              f"tamanho = {tamanho} bytes, n_meses = {n_meses}")
     finally:
         _os.remove(tmp_pdf_path)
 
@@ -1599,16 +1631,20 @@ def main():
         print(f"\nSalvo em {caminho} ({len(out)} meses)")
         sys.exit(0)
     if a.pdf_ipia:
-        print(f"Calculando IPIA para relatorio PDF, {a.ano_ini}-{a.ano_fim} ...")
-        out = calcular_ipia_mensal(a.ano_ini, a.ano_fim)
-        if out.empty:
-            print("Nenhum dado de importacao retornado - confira o periodo ou rode --check-sources primeiro.")
-            sys.exit(1)
+        print(f"Gerando relatorio PDF do IPIA (3 paginas), {a.ano_ini}-{a.ano_fim} ...")
+        # import local: reporting/ importa deste modulo (indices_setoriais.py
+        # e so o motor de calculo, nunca importa reporting no nivel de modulo -
+        # evita import circular, mesmo padrao ja usado para matplotlib/requests).
+        from reporting.report_builder import gerar_relatorio_ipia
         import os
         os.makedirs("data/processed", exist_ok=True)
         caminho = "data/processed/ipia_relatorio.pdf"
-        gerar_pdf_ipia(out, caminho, ParamsIPIA())
-        print(f"Relatorio salvo em {caminho} ({len(out)} meses na serie)")
+        try:
+            n_meses = gerar_relatorio_ipia(caminho, a.ano_ini, a.ano_fim)
+        except ValueError as e:
+            print(f"Nao foi possivel gerar o relatorio: {e}")
+            sys.exit(1)
+        print(f"Relatorio salvo em {caminho} ({n_meses} meses na serie)")
         sys.exit(0)
     if a.spec:
         ICCS.validar()

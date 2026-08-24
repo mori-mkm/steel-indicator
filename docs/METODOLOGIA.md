@@ -14,6 +14,13 @@ Crédito Setorial) existe só como especificação de pilares/pesos/fontes
 ainda, então não há "como calcular" real para documentar além da
 especificação em si (rodável via `--spec`).
 
+**Versão da metodologia**: `VERSAO_METODOLOGIA` (constante em
+`src/indices_setoriais.py`, hoje `"1.1"` — bump manual quando a
+metodologia de cálculo mudar, não a cada commit) é exibida no painel
+"Report Information" do relatório PDF (`--pdf-ipia`, ver
+`src/reporting/` e `docs/report_design_system.md`) como referência de
+qual versão deste documento corresponde ao número publicado.
+
 ## 1. Fórmula do IPIA
 
 ```

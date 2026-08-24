@@ -7,3 +7,4 @@ data/processed/*
 !data/processed/.gitkeep
 !data/curated/
 .env
+references/report_design/
