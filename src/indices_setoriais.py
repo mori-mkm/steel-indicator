@@ -37,7 +37,7 @@
 =============================================================================
 """
 from __future__ import annotations
-import argparse, json, sys, time, datetime as dt
+import argparse, json, re, sys, time, datetime as dt
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable
 
@@ -561,6 +561,239 @@ def ibge_sidra_ipp_metalurgia(periodos: str = "all") -> pd.Series:
     return s.rename("ipp_metalurgia").sort_index()
 
 
+# --- Taxa de Penetracao das Importacoes (Instituto Aco Brasil) -------------
+# Publicada mensalmente em acobrasil.org.br/site/estatistica-mensal/, em
+# dois formatos - nenhum deles e uma API estavel:
+#   - PDF "Estatistica Mensal": tabela "9.1 Taxa de Penetracao ... Mensal"
+#     com o numero OFICIAL (Importacao/Consumo Aparente, excluindo
+#     importacoes diretas pelas usinas), mas cada edicao so mostra o mes
+#     corrente + o mesmo mes do ano anterior - sem serie historica.
+#   - Excel "Performance Mensal": serie historica completa desde 2013, mas
+#     so com os componentes brutos (Importacoes, Consumo Aparente) - SEM a
+#     taxa pronta. Calculando Importacao/Consumo Aparente a partir dele NAO
+#     reproduz o numero oficial do PDF (testado em jul/2026, Planos: Excel
+#     da 16,66%, PDF oficial da 17,9% - diferenca real de ~1,2 p.p., porque
+#     o Excel aparentemente nao aplica a mesma exclusao de importacoes das
+#     usinas). Ver docs/adr/0007 para a investigacao completa, incluindo a
+#     reverificacao manual da tabela 9.1 (consistente com uma tabela
+#     independente do mesmo PDF e com o resumo executivo) e a divergencia
+#     com um numero citado pela imprensa/BTG Pactual (formula propria nao
+#     publica, nao e evidencia de erro do nosso lado).
+#
+# Granularidade real: so Planos vs. Longos (agregado) - nunca bobina a
+# quente isolada. tipo_dado_penetracao marca a fonte: "oficial_mensal"
+# (PDF) vs. "aproximado_consumo_aparente" (Excel, fallback historico).
+#
+# A pagina so expoe o arquivo do mes mais recente (sem arquivo de meses
+# passados), e a URL nao e previsivel por mes (testado: adivinhar a pasta
+# de upload falha para alguns meses) - por isso sempre resolve os links
+# ao vivo da pagina, nunca constroi a URL na mao.
+ACOBRASIL_ESTATISTICA_MENSAL_URL = "https://www.acobrasil.org.br/site/estatistica-mensal/"
+ACOBRASIL_MESES_PT = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                      "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+ACOBRASIL_MESES_PT_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+                            "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+
+def _acobrasil_resolver_links_mes_atual() -> dict:
+    """Resolve os links do PDF e do .xls do mes mais recente a partir da
+    pagina ao vivo de estatistica mensal - nunca constroi a URL adivinhando
+    a pasta de upload (testado: falha para alguns meses)."""
+    import requests
+    r = requests.get(ACOBRASIL_ESTATISTICA_MENSAL_URL, timeout=60,
+                     headers={"User-Agent": "pesquisa-setorial/1.0"})
+    r.raise_for_status()
+    pdfs = re.findall(r'https://www\.acobrasil\.org\.br/site/wp-content/uploads/[^"\'<> ]+?\.pdf', r.text, re.I)
+    xls = re.findall(r'https://www\.acobrasil\.org\.br/site/wp-content/uploads/[^"\'<> ]+?\.xlsx?', r.text, re.I)
+    if not pdfs or not xls:
+        raise ValueError(f"nao encontrei os links de PDF/xls na pagina de estatistica mensal "
+                         f"({len(pdfs)} pdf(s), {len(xls)} xls(s)) - layout da pagina pode ter mudado")
+    return {"pdf": pdfs[0], "xls": xls[0]}
+
+
+def _parse_tabela_penetracao_pdf(texto_pagina: str) -> dict:
+    """Funcao pura: recebe o texto ja extraido de UMA pagina do PDF e
+    extrai a tabela '9.1 ... Mensal' - nunca a '9.2 ... Acumulado no Ano',
+    que tem os mesmos rotulos de produto mas numeros diferentes (isolada
+    fatiando o texto entre '9.1.' e '9.2.', antes de qualquer regex).
+    """
+    if "9.1." not in texto_pagina or "Mensal" not in texto_pagina:
+        raise ValueError("secao '9.1 ... Mensal' nao encontrada no texto da pagina")
+    inicio = texto_pagina.index("9.1.")
+    fim = texto_pagina.find("9.2.")
+    trecho = texto_pagina[inicio: fim if fim != -1 else len(texto_pagina)]
+
+    mes_match = re.search(r"(" + "|".join(ACOBRASIL_MESES_PT) + r")\s*/", trecho)
+    if not mes_match:
+        raise ValueError("mes de referencia nao encontrado na secao 9.1")
+    mes_nome = mes_match.group(1)
+
+    # Os dois anos (ano anterior, ano atual) aparecem logo apos o cabecalho
+    # de mes ("Julho / July Julho / July\n2025 2026\n...") - busca numa
+    # janela a partir dai, NUNCA do inicio do trecho: "Produto" (rotulo da
+    # coluna, mais abaixo) e substring de "Produtos" (que aparece no titulo
+    # da secao, "... Produtos de Aço"), entao usar texto.find("Produto")
+    # como ancora cortaria o cabecalho antes mesmo de chegar nos anos.
+    janela_anos = trecho[mes_match.end(): mes_match.end() + 100]
+    anos = re.findall(r"\b(20\d{2})\b", janela_anos)
+    if len(anos) < 2:
+        raise ValueError(f"esperava 2 anos no cabecalho da secao 9.1, encontrei {anos}")
+    ano_anterior, ano_atual = int(anos[0]), int(anos[1])
+
+    def _num_br(s: str) -> float:
+        return float(s.replace(".", "").replace(",", "."))
+
+    def _linha(rotulo_regex: str) -> dict:
+        m = re.search(rotulo_regex + r"\s+([\d.]+)\s+([\d.]+)\s+([\d,]+)\s+([\d.]+)\s+([\d.]+)\s+([\d,]+)", trecho)
+        if not m:
+            raise ValueError(f"linha '{rotulo_regex}' nao encontrada na secao 9.1")
+        g = [_num_br(x) for x in m.groups()]
+        return {"consumo_aparente_t": g[3], "importacao_t": g[4], "taxa_penetracao_pct": g[5]}
+
+    return {
+        "mes_nome": mes_nome, "ano": ano_atual, "ano_anterior": ano_anterior,
+        "planos": _linha(r"Planos\s*/\s*Flats"),
+        "longos": _linha(r"Longos\s*/\s*Longs"),
+    }
+
+
+def acobrasil_taxa_penetracao_pdf_mes_atual(url_pdf: str | None = None) -> pd.DataFrame:
+    """Baixa o PDF 'Estatistica Mensal' mais recente (via link resolvido ao
+    vivo, a menos que url_pdf seja passado) e devolve a taxa de penetracao
+    OFICIAL (tabela 9.1) do mes coberto - uma linha por categoria
+    (planos/longos), tipo_dado_penetracao='oficial_mensal'.
+    """
+    import io, requests, pdfplumber
+    if url_pdf is None:
+        url_pdf = _acobrasil_resolver_links_mes_atual()["pdf"]
+    r = requests.get(url_pdf, timeout=60, headers={"User-Agent": "pesquisa-setorial/1.0"})
+    r.raise_for_status()
+    texto = None
+    with pdfplumber.open(io.BytesIO(r.content)) as pdf:
+        for pagina in pdf.pages:
+            t = pagina.extract_text() or ""
+            if "9.1." in t and "Mensal" in t:
+                texto = t
+                break
+    if texto is None:
+        raise ValueError("secao '9.1 ... Mensal' (Taxa de Penetracao) nao encontrada no PDF")
+    dados = _parse_tabela_penetracao_pdf(texto)
+    data = pd.Timestamp(year=dados["ano"], month=ACOBRASIL_MESES_PT.index(dados["mes_nome"]) + 1, day=1)
+    linhas = [
+        {"data": data, "categoria": cat, "tipo_dado_penetracao": "oficial_mensal",
+         "fonte_penetracao": url_pdf, **dados[cat]}
+        for cat in ("planos", "longos")
+    ]
+    return pd.DataFrame(linhas).set_index("data")
+
+
+def _calcular_penetracao_de_performance_mensal(df_bruto: pd.DataFrame, categoria: str) -> pd.DataFrame:
+    """Funcao pura: recebe o DataFrame bruto (header=None, como
+    pd.read_excel devolve) do Excel 'Performance Mensal' e calcula
+    Importacao/Consumo Aparente por mes para 'planos' ou 'longos'.
+    Localiza as linhas por TEXTO (nunca por indice fixo de linha), para
+    nao quebrar se o Instituto Aco Brasil inserir/remover uma linha do
+    template. Retorna colunas: consumo_aparente_t, importacao_t,
+    taxa_penetracao_pct (indice = mes).
+    """
+    if categoria not in ("planos", "longos"):
+        raise ValueError(f"categoria invalida: {categoria!r} (use 'planos' ou 'longos')")
+    rotulo = "Planos" if categoria == "planos" else "Longos"
+    col0 = df_bruto.iloc[:, 0].astype(str)
+
+    def _linha_apos_secao(nome_secao: str) -> int:
+        idx_secao = col0[col0.str.contains(nome_secao, case=False, na=False)].index
+        if len(idx_secao) == 0:
+            raise ValueError(f"secao '{nome_secao}' nao encontrada na planilha")
+        inicio = idx_secao[0]
+        janela = col0.loc[inicio: inicio + 6]
+        idx_produto = janela[janela.str.contains(rotulo, case=False, na=False)].index
+        if len(idx_produto) == 0:
+            raise ValueError(f"linha '{rotulo}' nao encontrada apos a secao '{nome_secao}'")
+        return idx_produto[0]
+
+    linha_importacao = _linha_apos_secao("Importa")
+    linha_consumo = _linha_apos_secao("Consumo Aparente")
+
+    linha_ano = next((i for i in range(min(10, df_bruto.shape[0]))
+                      if (pd.to_numeric(df_bruto.iloc[i], errors="coerce") >= 2000).sum() >= 1), None)
+    if linha_ano is None:
+        raise ValueError("linha de anos nao encontrada na planilha (esperava valores >= 2000)")
+    anos = df_bruto.iloc[linha_ano].ffill()
+    meses = df_bruto.iloc[linha_ano + 1].astype(str).str.split("\n").str[0].str.strip()
+
+    importacao = pd.to_numeric(df_bruto.iloc[linha_importacao], errors="coerce")
+    consumo = pd.to_numeric(df_bruto.iloc[linha_consumo], errors="coerce")
+
+    linhas = []
+    for col in df_bruto.columns:
+        mes, ano = meses.get(col), anos.get(col)
+        if mes not in ACOBRASIL_MESES_PT_ABREV or pd.isna(ano):
+            continue
+        imp, cons = importacao.get(col), consumo.get(col)
+        if pd.isna(imp) or pd.isna(cons) or cons == 0:
+            continue
+        data = pd.Timestamp(year=int(ano), month=ACOBRASIL_MESES_PT_ABREV.index(mes) + 1, day=1)
+        # valores da planilha estao em MIL toneladas - converte para toneladas,
+        # mesma unidade da tabela 9.1 do PDF (evita mistura de unidade na hora de combinar as duas fontes)
+        linhas.append({"data": data, "consumo_aparente_t": cons * 1000, "importacao_t": imp * 1000,
+                       "taxa_penetracao_pct": imp / cons * 100.0})
+    return pd.DataFrame(linhas).drop_duplicates(subset="data", keep="last").set_index("data").sort_index()
+
+
+def acobrasil_taxa_penetracao_xls_historico(ano_ini: int = 2013, ano_fim: int | None = None,
+                                            url_xls: str | None = None) -> pd.DataFrame:
+    """Baixa o Excel 'Performance Mensal' mais recente (via link resolvido
+    ao vivo, a menos que url_xls seja passado) e devolve a serie historica
+    APROXIMADA (nao reproduz o numero oficial do PDF - ver nota acima)
+    de taxa de penetracao, planos e longos, desde ano_ini.
+    tipo_dado_penetracao='aproximado_consumo_aparente'.
+    """
+    import io, requests
+    if url_xls is None:
+        url_xls = _acobrasil_resolver_links_mes_atual()["xls"]
+    r = requests.get(url_xls, timeout=60, headers={"User-Agent": "pesquisa-setorial/1.0"})
+    r.raise_for_status()
+    df_bruto = pd.read_excel(io.BytesIO(r.content), sheet_name=0, header=None)
+
+    partes = []
+    for categoria in ("planos", "longos"):
+        calc = _calcular_penetracao_de_performance_mensal(df_bruto, categoria)
+        calc["categoria"] = categoria
+        partes.append(calc)
+    out = pd.concat(partes)
+    out = out[(out.index.year >= ano_ini) & (out.index.year <= (ano_fim or out.index.year.max()))]
+    out["tipo_dado_penetracao"] = "aproximado_consumo_aparente"
+    out["fonte_penetracao"] = url_xls
+    return out.sort_index()
+
+
+def taxa_penetracao_importacao_planos_mensal(ano_ini: int = 2013, ano_fim: int | None = None,
+                                              df_historico: pd.DataFrame | None = None,
+                                              df_oficial: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Serie mensal da taxa de penetracao de importacao para PRODUTOS
+    PLANOS (nao especifico de bobina a quente - e a granularidade real
+    disponivel do Aco Brasil, ver docs/adr/0007). Combina as duas fontes:
+    o PDF oficial para o(s) mes(es) que ele cobre, o Excel aproximado
+    para preencher o resto do historico - o oficial NUNCA e sobrescrito
+    pelo aproximado, mesmo que o Excel tambem cubra aquele mes.
+
+    df_historico/df_oficial aceitam DataFrame ja pronto (mesmo formato de
+    `acobrasil_taxa_penetracao_xls_historico`/`acobrasil_taxa_penetracao_pdf_mes_atual`)
+    para uso em teste sem rede - se None, busca ao vivo.
+    """
+    if df_historico is None:
+        df_historico = acobrasil_taxa_penetracao_xls_historico(ano_ini, ano_fim)
+    if df_oficial is None:
+        df_oficial = acobrasil_taxa_penetracao_pdf_mes_atual()
+
+    cols = ["taxa_penetracao_pct", "tipo_dado_penetracao"]
+    hist_planos = df_historico.loc[df_historico["categoria"] == "planos", cols]
+    oficial_planos = df_oficial.loc[df_oficial["categoria"] == "planos", cols]
+    hist_sem_sobreposicao = hist_planos[~hist_planos.index.isin(oficial_planos.index)]
+    return pd.concat([hist_sem_sobreposicao, oficial_planos]).sort_index()
+
+
 def comex_importacao_ncm(ncm: List[str], ano_ini: int, ano_fim: int) -> pd.DataFrame:
     """Importacao por NCM no Comex Stat, com valor FOB, frete, seguro e peso.
 
@@ -708,6 +941,10 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFra
     blend = preco_domestico_ponderado(trimestral)
     ipp = ibge_sidra_ipp_metalurgia()
     domestico = encadear_preco_domestico_mensal(blend, ipp)
+    # Taxa de penetracao de importacao (Aco Brasil, Planos - ver docs/adr/0007):
+    # mes sem dado (nem oficial nem aproximado ainda disponivel) fica NaN
+    # explicito via reindex sem ffill - nunca fabricado.
+    penetracao = taxa_penetracao_importacao_planos_mensal()
     idx = bobina.index.intersection(domestico.index)
     return pd.DataFrame({
         "ipia": ipia(domestico.loc[idx, "preco_rs_t"], custo.loc[idx, "ppi_brl_t"]),
@@ -716,6 +953,8 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFra
         "tipo_dado_domestico": domestico.loc[idx, "tipo_dado"],
         "metodo_domestico": domestico.loc[idx, "metodo"],
         "peso_confiabilidade_importacao": bobina.loc[idx, "peso_confiabilidade"],
+        "penetracao_importacao_planos_pct": penetracao["taxa_penetracao_pct"].reindex(idx),
+        "tipo_dado_penetracao": penetracao["tipo_dado_penetracao"].reindex(idx),
     })
 
 # =============================================================================
@@ -728,9 +967,10 @@ def gerar_pdf_ipia(df: pd.DataFrame, caminho_pdf: str, params: ParamsIPIA,
 
     So visualiza - nao recalcula nem busca dado novo, tudo vem do
     DataFrame recebido (ver `calcular_ipia_mensal`). "Penetracao de
-    importacao" nao tem coletor implementado hoje (so existe como entrada
-    de spec do ICCS) - por isso aparece como "nao disponivel" no painel,
-    nunca como numero inventado.
+    importacao" (Planos, Aco Brasil - ver docs/adr/0007) mostra o numero
+    real quando o mes mais recente do DataFrame tiver dado; se o mes nao
+    tiver (nem oficial nem aproximado ainda disponivel), mostra "nao
+    disponivel" - nunca um numero inventado para preencher a lacuna.
     """
     import textwrap
     import matplotlib
@@ -761,12 +1001,19 @@ def gerar_pdf_ipia(df: pd.DataFrame, caminho_pdf: str, params: ParamsIPIA,
     ax.tick_params(axis="x", labelsize=8)
 
     # --- painel com os numeros mais recentes ---------------------------------
+    penet = ultimo.get("penetracao_importacao_planos_pct")
+    tipo_penet = ultimo.get("tipo_dado_penetracao")
+    if pd.notna(penet):
+        rotulo_penet = "oficial" if tipo_penet == "oficial_mensal" else "aproximado"
+        linha_penetracao = f"Penetração de importação (Planos, {rotulo_penet}): {penet:.1f}%"
+    else:
+        linha_penetracao = "Penetração de importação: não disponível para este mês"
     linhas_painel = [
         f"IPIA atual ({df.index[-1]:%b/%Y}): {ultimo['ipia']:.1f}",
         f"Preço doméstico: R$ {ultimo['preco_domestico_rs_t']:,.0f}/t",
         f"Custo de importação (paridade): R$ {ultimo['ppi_rs_t']:,.0f}/t",
         f"Spread doméstico vs. paridade: R$ {spread_rs:,.0f}/t ({ultimo['ipia'] - 100:+.1f} pts)",
-        "Penetração de importação: não disponível (sem coletor implementado)",
+        linha_penetracao,
     ]
     ax_p = fig.add_axes((0.10, 0.50, 0.85, 0.12)); ax_p.axis("off")
     ax_p.text(0, 1, "\n".join(linhas_painel), fontsize=10, va="top", family="monospace")
@@ -786,7 +1033,8 @@ def gerar_pdf_ipia(df: pd.DataFrame, caminho_pdf: str, params: ParamsIPIA,
     rodape = textwrap.fill(
         "Fontes: Comex Stat (importação), BCB/SGS (câmbio), releases "
         "trimestrais Usiminas/CSN (preço doméstico), IBGE/SIDRA IPP "
-        "metalurgia (encadeamento mensal). Metodologia: IPIA = preço "
+        "metalurgia (encadeamento mensal), Instituto Aço Brasil "
+        "(penetração de importação, Planos). Metodologia: IPIA = preço "
         "doméstico / custo de importação posto no cliente (CIF + II + "
         "AFRMM + antidumping + despesas de porto + frete interno + "
         "margem) × 100.", width=100)
@@ -1118,6 +1366,8 @@ def selftest() -> int:
         "tipo_dado_domestico":           ["proxy_segmento_aco"] * 6,
         "metodo_domestico":              ["nivel_trimestral"] * 6,
         "peso_confiabilidade_importacao":[1.0] * 6,
+        "penetracao_importacao_planos_pct": [24.1, 20.2, 18.5, 17.9, np.nan, 17.9],
+        "tipo_dado_penetracao":          ["aproximado_consumo_aparente"] * 4 + [np.nan, "oficial_mensal"],
     }, index=idx_pdf)
     tmp_pdf_fd, tmp_pdf_path = tempfile.mkstemp(suffix=".pdf")
     _os.close(tmp_pdf_fd)
@@ -1129,6 +1379,104 @@ def selftest() -> int:
               f"tamanho = {tamanho} bytes")
     finally:
         _os.remove(tmp_pdf_path)
+
+    # --- 16. taxa de penetracao: parsing da tabela 9.1 do PDF do Aco Brasil -
+    # Texto real capturado do PDF "Estatistica Mensal" de jul/2026 (paginas
+    # 9.1 Mensal + 9.2 Acumulado no Ano juntas, como pdfplumber extrai) -
+    # confirma que a funcao pega a secao certa (9.1) e nao a errada (9.2),
+    # que tem os MESMOS rotulos de produto com numeros diferentes.
+    texto_pdf_teste = (
+        "9.1. Taxa de Penetração das Importações Brasileiras de Produtos de Aço - Mensal\n"
+        "Import Penetratrion of Steel Products - Monthly\n"
+        "Unid. / Unit: Tonelada / Tonne\n"
+        "Julho / July Julho / July\n"
+        "2025 2026\n"
+        "Produto\n"
+        "Consumo/ Importação/ Consumo/ Importação/\n"
+        "Product ( B / A ) ( B / A )\n"
+        "Consumption Import Consumption Import\n"
+        "(%) (%)\n"
+        "(A) (B) (A) (B)\n"
+        "Planos / Flats 1.370.203 329.812 24,1 1.361.849 244.207 17,9\n"
+        "Longos / Longs 964.772 149.091 15,5 864.219 125.901 14,6\n"
+        "Total 2.334.975 478.903 20,5 2.226.068 370.108 16,6\n"
+        "Nota / Note: Para evitar dupla contagem, excluídas as importações diretas pelas usinas.\n"
+        "Fonte / Source: Aço Brasil / MDIC\n"
+        "9.2. Taxa de Penetração das Importações Brasileiras de Produtos de Aço - Acumulado no Ano\n"
+        "Import Penetratrion of Steel Products - Year to Date\n"
+        "Unid. / Unit: Tonelada / Tonne\n"
+        "Jan-Jul / Jan-Jul Jan-Jul / Jan-Jul\n"
+        "2025 2026\n"
+        "Produto\n"
+        "Planos/ Flats 9.723.679 2.558.850 26,3 9.362.495 2.015.832 21,5\n"
+        "Longos/ Longs 6.265.458 1.096.052 17,5 5.823.250 830.313 14,3\n"
+        "Total 15.989.137 3.654.902 22,9 15.185.745 2.846.145 18,7\n"
+    )
+    dados_penet = _parse_tabela_penetracao_pdf(texto_pdf_teste)
+    check("penetracao PDF: pega o mes/ano certos (Julho/2026, nao o ano anterior)",
+          dados_penet["mes_nome"] == "Julho" and dados_penet["ano"] == 2026
+          and dados_penet["ano_anterior"] == 2025)
+    check("penetracao PDF: pega a taxa da secao 9.1 (Mensal), nao a 9.2 (Acumulado)",
+          abs(dados_penet["planos"]["taxa_penetracao_pct"] - 17.9) < 1e-9
+          and abs(dados_penet["longos"]["taxa_penetracao_pct"] - 14.6) < 1e-9,
+          f"planos = {dados_penet['planos']['taxa_penetracao_pct']} (9.1=17.9, 9.2=21.5 - teria pegado errado)")
+    check("penetracao PDF: consumo/importacao em toneladas batem com o texto",
+          abs(dados_penet["planos"]["consumo_aparente_t"] - 1361849.0) < 1e-6
+          and abs(dados_penet["planos"]["importacao_t"] - 244207.0) < 1e-6)
+
+    # --- 17. taxa de penetracao: calculo a partir do Excel 'Performance Mensal'
+    # DataFrame sintetico pequeno reproduzindo o layout real (secoes
+    # localizadas por texto, nao por indice de linha fixo).
+    df_bruto_teste = pd.DataFrame([
+        ["Especificação\nSpecification", 2025, None, None],
+        [None, "Jan\nJan", "Fev\nFeb", "Mar\nMar"],
+        ["Importações / Imports", None, None, None],
+        ["Planos / Flats", 100.0, 110.0, 120.0],
+        ["Longos / Longs", 50.0, 55.0, 60.0],
+        ["Consumo Aparente / Apparent Consumption", None, None, None],
+        ["Planos / Flats\n(Inclui Placas)", 500.0, 550.0, 600.0],
+        ["Longos / Longs\n(Inclui Blocos)", 300.0, 330.0, 360.0],
+    ])
+    calc_planos = _calcular_penetracao_de_performance_mensal(df_bruto_teste, "planos")
+    check("penetracao Excel: localiza as linhas certas por texto e calcula Importacao/Consumo",
+          len(calc_planos) == 3
+          and abs(float(calc_planos.loc["2025-01-01", "taxa_penetracao_pct"]) - 20.0) < 1e-9
+          and abs(float(calc_planos.loc["2025-03-01", "taxa_penetracao_pct"]) - 20.0) < 1e-9,
+          f"taxas calculadas = {calc_planos['taxa_penetracao_pct'].tolist()}")
+    calc_longos = _calcular_penetracao_de_performance_mensal(df_bruto_teste, "longos")
+    check("penetracao Excel: 'longos' pega uma linha diferente de 'planos' (nao confunde as duas)",
+          abs(float(calc_longos.loc["2025-02-01", "taxa_penetracao_pct"]) - (55.0 / 330.0 * 100)) < 1e-6)
+    try:
+        _calcular_penetracao_de_performance_mensal(df_bruto_teste, "invalida")
+        check("penetracao Excel: categoria invalida e rejeitada", False)
+    except ValueError:
+        check("penetracao Excel: categoria invalida e rejeitada", True)
+
+    # --- 18. taxa de penetracao: combinacao oficial (PDF) + aproximado (Excel)
+    # PDF cobre so o mes mais recente (jul/2026); Excel cobre mai-jul/2026,
+    # incluindo o MESMO mes que o PDF - o oficial tem que vencer, nunca ser
+    # sobrescrito pelo aproximado.
+    idx_hist_penet = pd.date_range("2026-05-01", periods=3, freq="MS")
+    df_hist_penet_teste = pd.DataFrame({
+        "categoria": ["planos"] * 3,
+        "taxa_penetracao_pct": [15.0, 16.0, 16.66],  # jul/2026 aproximado (o valor real via Excel)
+        "tipo_dado_penetracao": ["aproximado_consumo_aparente"] * 3,
+    }, index=idx_hist_penet)
+    df_oficial_penet_teste = pd.DataFrame({
+        "categoria": ["planos"],
+        "taxa_penetracao_pct": [17.9],  # jul/2026 oficial (o valor real via PDF)
+        "tipo_dado_penetracao": ["oficial_mensal"],
+    }, index=[pd.Timestamp("2026-07-01")])
+    combinado_penet = taxa_penetracao_importacao_planos_mensal(
+        df_historico=df_hist_penet_teste, df_oficial=df_oficial_penet_teste)
+    check("penetracao combinada: mes coberto pelas duas fontes fica com o valor OFICIAL",
+          combinado_penet.loc["2026-07-01", "tipo_dado_penetracao"] == "oficial_mensal"
+          and abs(float(combinado_penet.loc["2026-07-01", "taxa_penetracao_pct"]) - 17.9) < 1e-9)
+    check("penetracao combinada: meses so no Excel ficam marcados como aproximado",
+          combinado_penet.loc["2026-05-01", "tipo_dado_penetracao"] == "aproximado_consumo_aparente"
+          and combinado_penet.loc["2026-06-01", "tipo_dado_penetracao"] == "aproximado_consumo_aparente")
+    check("penetracao combinada: nao duplica o mes sobreposto (3 meses no total, nao 4)",
+          len(combinado_penet) == 3, f"len = {len(combinado_penet)}")
 
     print("-" * 74)
     if falhas:
@@ -1175,6 +1523,14 @@ def check_sources() -> int:
     except Exception as e:
         ok = False
         print(f"  [ERRO] IBGE/SIDRA IPP metalurgia: {e}")
+    try:
+        dados_penet = acobrasil_taxa_penetracao_pdf_mes_atual()
+        linha = dados_penet.loc[dados_penet["categoria"] == "planos"].iloc[0]
+        print(f"  [OK ] Aco Brasil - Taxa de Penetracao (PDF, tabela 9.1, Planos): "
+              f"{linha['taxa_penetracao_pct']:.1f}% em {dados_penet.index[0]:%m/%Y}")
+    except Exception as e:
+        ok = False
+        print(f"  [ERRO] Aco Brasil - Taxa de Penetracao (PDF): {e}")
     print("-" * 74)
     print("  SCR.data (CNAE): baixe os ZIP mensais em")
     print("     https://dadosabertos.bcb.gov.br/dataset/scr_data")

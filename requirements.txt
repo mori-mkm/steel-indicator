@@ -7,8 +7,14 @@ numpy==2.4.6
 requests==2.34.2
 matplotlib==3.11.1
 
-# extracao de texto de PDFs de release (data/raw/) para curar
-# data/curated/preco_domestico_aco.csv - nao e importado por
-# src/indices_setoriais.py, e usado no workflow manual de curadoria
-# (ver docs/adr/0003)
+# extracao de texto de PDFs: usado no workflow manual de curadoria de
+# data/curated/preco_domestico_aco.csv (ver docs/adr/0003) E, desde o
+# coletor de taxa de penetracao de importacao (docs/adr/0007), importado
+# de verdade dentro de src/indices_setoriais.py
+# (acobrasil_taxa_penetracao_pdf_mes_atual).
 pdfplumber==0.11.10
+
+# leitura do .xls legado (formato binario antigo do Excel) publicado pelo
+# Instituto Aco Brasil - pandas.read_excel precisa do xlrd especificamente
+# para esse formato (openpyxl so cobre .xlsx). Ver docs/adr/0007.
+xlrd==2.0.2

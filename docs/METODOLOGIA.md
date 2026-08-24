@@ -236,6 +236,7 @@ hoje é "segmento", não "produto".
 | **BCB/SGS** (`api.bcb.gov.br/dados/serie/...`) | Câmbio (PTAX, série `cambio_venda`, código 1) | Série diária: a API **rejeita (406)** janela de consulta acima de 10 anos para séries diárias — por isso `calcular_ipia_mensal` amarra o início da consulta a `ano_ini` em vez de usar o default de `sgs()` (2010), que sozinho já estoura o limite a partir de 2020. Códigos SGS têm status de confirmação heterogêneo (ver tabela abaixo). |
 | **IBGE/SIDRA** (tabela 6903) | IPP mensal, CNAE 24 – Metalurgia, para encadeamento trimestre→mês | Variável 10008 (número-índice, dez/2018=100), classificação `842[46641]` = "24 METALURGIA". **Confirmada ao vivo** via `.../agregados/6903/metadados`. A tabela **5796** (que aparece em buscas antigas por "IPP CNAE") está **encerrada desde jan/2019** — não usar. |
 | **Releases trimestrais Usiminas/CSN** | Preço doméstico (âncora) | Sem API — ingestão semi-manual via CSV curado (`data/curated/`). Ver seção 6 e ADR 0003. |
+| **Instituto Aço Brasil** (`acobrasil.org.br/site/estatistica-mensal/`) | Taxa de penetração de importação (Planos vs. Longos) | Sem API — dois arquivos (PDF oficial + Excel `.xls` histórico), publicados só o mês mais recente (sem arquivo de meses passados), URL não previsível por mês (testado: adivinhar falha para alguns meses) — sempre resolvida ao vivo da página. Calcular a taxa a partir do Excel **não reproduz** o número oficial do PDF (diferença real de ~1,2 p.p. testada) — por isso a fonte é híbrida, com `tipo_dado_penetracao` marcando qual é qual. Ver [ADR 0007](adr/0007-taxa-penetracao-importacao-acobrasil.md), que também registra um padrão geral: citações de terceiros (bancos, research) sobre "penetração de importação" costumam usar fórmula própria não pública — divergência com um número de terceiro não é necessariamente erro da nossa extração; a evidência que sustenta uma fonte como confiável é consistência interna (com outras tabelas do mesmo documento), não concordância com todo número de terceiro. |
 
 ### Status dos códigos SGS (`SGS` dict)
 
@@ -300,7 +301,16 @@ hoje é "segmento", não "produto".
   vem da leitura da Circular SECEX 39/2025; o próprio comentário no
   código pede confirmação adicional no Siscomex antes do primeiro
   cálculo publicado — isso não foi feito além da leitura da circular.
-- **`--pdf-ipia` mostra "penetração de importação" como não disponível**:
-  não há coletor implementado para essa métrica — só existe como entrada
-  de spec do ICCS (`penetracao_importados`, pilar `externo`), sem dado
-  real por trás ainda.
+- **Penetração de importação é agregado "Planos", não bobina a quente
+  específica**: mesmo padrão de granularidade do preço doméstico (ver
+  ADR 0007) — o Instituto Aço Brasil não publica essa quebra por produto
+  específico, só por categoria (Planos/Longos).
+- **Sem cross-validação da penetração de importação**: o projeto não tem
+  consumo aparente doméstico próprio (só volume de importação via Comex
+  Stat, com escopo mais estreito — 13 NCMs específicos de bobina a
+  quente, não "Planos" inteiro), então não há como montar uma taxa
+  própria comparável à do Aço Brasil para validação cruzada (ver
+  ADR 0007). Avaliado, não implementado.
+- **Meses sem PDF nem Excel do Aço Brasil disponível ficam `NaN`**: sem
+  fallback silencioso — `--pdf-ipia` mostra "não disponível" nesse caso,
+  nunca um número inventado.
