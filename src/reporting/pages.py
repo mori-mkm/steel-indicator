@@ -144,25 +144,48 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
              fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
              fontstyle="italic", va="top")
 
-    # KPIs
+    # KPIs - cada um com periodo (mes real desse numero especifico, nunca
+    # "atual" sozinho) e selo de proveniencia (OBSERVADO/CALCULADO/
+    # ESTIMADO + PROXY, ver docs/adr/0008). Os 3 KPIs desta pagina vem da
+    # MESMA linha de df_ipia, entao hoje compartilham o mesmo periodo -
+    # ainda assim cada um mostra o seu, pela mesma regra usada na pagina 3
+    # (onde podem legitimamente divergir).
+    periodo_kpi = _mes_pt(ultimo.name)
+    v_ipia = motor.classificar_ipia(ultimo)
+    v_preco = motor.classificar_preco_domestico(ultimo)
+    v_penet = motor.classificar_penetracao(ultimo)
+
     y_kpi = y_legenda_spark - 0.033
     c.kpi_tile(fig, MARGEM, y_kpi, 0.25, "IPIA ATUAL", f"{ultimo['ipia']:.1f}",
-              cor_valor=t.COR_ACCENT_2,
-              nota=f"{'▲' if delta_total >= 0 else '▼'} {abs(delta_total):.1f} pts no período")
+              cor_valor=t.COR_ACCENT_2, periodo=periodo_kpi,
+              nota=f"{'▲' if delta_total >= 0 else '▼'} {abs(delta_total):.1f} pts no período",
+              selo=c.selo_dado_texto(v_ipia.nivel, v_ipia.proxy))
     spread_atual = ultimo["preco_domestico_rs_t"] - ultimo["ppi_rs_t"]
     c.kpi_tile(fig, MARGEM + 0.32, y_kpi, 0.25, "SPREAD (DOM. VS. PARIDADE)",
-              f"R$ {spread_atual:,.0f}/t")
+              f"R$ {spread_atual:,.0f}/t", periodo=periodo_kpi,
+              selo=c.selo_dado_texto(v_preco.nivel, v_preco.proxy))
     penet = ultimo.get("penetracao_importacao_planos_pct")
     tipo_penet = ultimo.get("tipo_dado_penetracao")
     if pd.notna(penet):
         rotulo = "oficial" if tipo_penet == "oficial_mensal" else "aproximado"
         c.kpi_tile(fig, MARGEM + 0.64, y_kpi, 0.25, "PENETRAÇÃO (PLANOS)",
-                  f"{penet:.1f}%", nota=rotulo)
+                  f"{penet:.1f}%", nota=rotulo, periodo=periodo_kpi,
+                  selo=c.selo_dado_texto(v_penet.nivel, v_penet.proxy) if v_penet else None)
     else:
         c.kpi_tile(fig, MARGEM + 0.64, y_kpi, 0.25, "PENETRAÇÃO (PLANOS)",
-                  "n/d", nota="sem dado neste mês")
+                  "n/d", nota="sem dado neste mês", periodo=periodo_kpi)
 
-    y_secao = y_kpi - 0.055
+    # limitacao material em texto corrido (fora de qualquer caixa isolada -
+    # a caixa de ressalvas da pagina 2 continua existindo, mas a pagina 1
+    # tambem precisa deixar isso visivel no corpo, nao so ali)
+    y_disclosure = c.texto_corrido(
+        fig, MARGEM, y_kpi - 0.085, 1 - 2 * MARGEM,
+        "IPIA e preço doméstico usam uma âncora que é proxy do segmento \"Siderurgia\" de "
+        "Usiminas/CSN (selo CALCULADO · PROXY acima), não específica de bobina a quente — "
+        "detalhe completo na decomposição de custo, página 2.",
+        fontsize=8, cor=t.COR_TEXTO_SECUNDARIO)
+
+    y_secao = y_disclosure - 0.025
     c.secao_titulo(fig, MARGEM, y_secao, "O QUE MUDOU")
     y_apos_callout = c.callout_numerado(fig, MARGEM, y_secao - 0.03, 1 - 2 * MARGEM,
                                         _gerar_bullets_executivos(df_ipia))
@@ -201,9 +224,18 @@ def pagina_decomposicao_custo(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame
     c.titulo_serif(fig, MARGEM, 0.90, "Decomposição do Custo de Importação", fontsize=19)
     ultimo = df_custo.iloc[-1]
     ultimo_ipia = df_ipia.iloc[-1]
-    fig.text(MARGEM, 0.868, f"Mês de referência: {_mes_pt(df_custo.index[-1], abreviado=False)}",
-             transform=fig.transFigure, fontsize=9.5, color=t.COR_TEXTO_SECUNDARIO,
-             fontfamily=t.FONTE_SANS, va="top")
+    # bug real corrigido (ver docs/adr/0008): esta pagina usava
+    # df_custo.iloc[-1] (mes mais fresco do lado importacao) junto de
+    # df_ipia.iloc[-1] (mes mais fresco da INTERSECCAO bobina x
+    # domestico) como se fossem o mesmo mes, e imprimia UM "Mes de
+    # referencia" so - quando os dois lados divergem (import mais fresco
+    # que o encadeamento IPP do lado domestico), o spread misturava dois
+    # meses diferentes sem avisar. Agora: o waterfall usa o mes mais
+    # fresco disponivel (df_custo, self-contido, soma bate sozinha); a
+    # COMPARACAO usa o mes de df_ipia dos dois lados (nunca combina dois
+    # meses numa mesma formula) - cada bloco imprime seu proprio mes no
+    # titulo do grafico, nunca um rotulo unico para a pagina inteira.
+    ultimo_custo_mes_ipia = df_custo.loc[df_ipia.index[-1]]
 
     fob_brl_t = ultimo["fob_usd_t"] * ultimo["cambio"]
     frete_brl_t = ultimo["frete_usd_t"] * ultimo["cambio"]
@@ -223,33 +255,40 @@ def pagina_decomposicao_custo(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame
     maior = max(componentes, key=lambda item: item[1])
 
     y_top_wf = c.cabecalho_grafico(
-        fig, MARGEM, 0.800, 1 - 2 * MARGEM, "Do FOB ao custo de internação (R$/t)",
+        fig, MARGEM, 0.800, 1 - 2 * MARGEM,
+        f"Do FOB ao custo de internação (R$/t) — {_mes_pt(ultimo.name, abreviado=False)}",
         interpretacao=(f"Maior componente: {maior[0]} (R$ {maior[1]:,.0f}/t, "
                        f"{maior[1] / total * 100:.0f}% do custo de internação)."))
     altura_wf = 0.10
     ax_wf = fig.add_axes((MARGEM, y_top_wf - altura_wf, 1 - 2 * MARGEM, altura_wf))
     c.grafico_barras_empilhadas(ax_wf, "Custo de\ninternação", componentes)
 
-    spread = ultimo_ipia["preco_domestico_rs_t"] - ultimo["ppi_brl_t"]
+    # spread SEMPRE no mesmo mes dos dois lados (df_ipia.index[-1]) - uma
+    # formula que soma dois valores nao pode vir de meses diferentes, ao
+    # contrario de KPIs independentes lado a lado (ver nota acima)
+    spread = ultimo_ipia["preco_domestico_rs_t"] - ultimo_custo_mes_ipia["ppi_brl_t"]
     direcao_spread_txt = ("favorável à importação (custo de internação abaixo do preço doméstico)"
                           if spread > 0 else
                           "favorável ao produto doméstico (custo de internação acima do preço doméstico)"
                           if spread < 0 else "neutro")
+    v_preco_pag2 = motor.classificar_preco_domestico(ultimo_ipia)
+    selo_preco = c.selo_dado_texto(v_preco_pag2.nivel, v_preco_pag2.proxy)
     y_top_cmp = c.cabecalho_grafico(
         fig, MARGEM, y_top_wf - altura_wf - 0.05, 1 - 2 * MARGEM,
-        "Preço doméstico vs. custo de internação",
-        interpretacao=f"Spread de R$ {abs(spread):,.0f}/t, {direcao_spread_txt}.")
+        f"Preço doméstico vs. custo de internação — {_mes_pt(df_ipia.index[-1], abreviado=False)}",
+        interpretacao=(f"Spread de R$ {abs(spread):,.0f}/t, {direcao_spread_txt}. Preço doméstico: "
+                       f"{selo_preco}." if selo_preco else f"Spread de R$ {abs(spread):,.0f}/t, {direcao_spread_txt}."))
     altura_cmp = 0.10
     c.grafico_barras_horizontais(
         fig, MARGEM, y_top_cmp - altura_cmp, 1 - 2 * MARGEM, altura_cmp,
         ["Preço doméstico", "Custo de internação"],
-        [ultimo_ipia["preco_domestico_rs_t"], ultimo["ppi_brl_t"]],
+        [ultimo_ipia["preco_domestico_rs_t"], ultimo_custo_mes_ipia["ppi_brl_t"]],
         cor=t.COR_ACCENT_2, formato_valor="R$ {:,.0f}/t")
     y_apos_spread = c.texto_corrido(
         fig, MARGEM, y_top_cmp - altura_cmp - 0.022, 1 - 2 * MARGEM,
-        f"O spread entre preço doméstico e custo de internação (gráfico acima) é de "
-        f"R$ {spread:,.0f}/t, equivalente a {ultimo_ipia['ipia'] - 100:+.1f} pts em relação à "
-        f"paridade (IPIA=100).",
+        f"O spread entre preço doméstico e custo de internação (gráfico acima, ambos de "
+        f"{_mes_pt(df_ipia.index[-1])}) é de R$ {spread:,.0f}/t, equivalente a "
+        f"{ultimo_ipia['ipia'] - 100:+.1f} pts em relação à paridade (IPIA={ultimo_ipia['ipia']:.1f}).",
         bold=True)
 
     linhas_tabela = [[nome, f"{valor:,.0f}", f"{valor / total * 100:.1f}%"]
@@ -308,22 +347,38 @@ def pagina_series_temporais(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame,
     tipo_penet = ultimo.get("tipo_dado_penetracao")
     cambio_atual = df_custo["cambio"].iloc[-1] if len(df_custo) else float("nan")
 
+    # cada KPI mostra o PROPRIO periodo mais fresco (ver docs/adr/0008) -
+    # IPIA/SPREAD/PENETRACAO vem de df_ipia (intersecao bobina x
+    # domestico), CAMBIO vem de df_custo (so bobina) - podem legitimamente
+    # divergir (o lado domestico costuma ficar mais atras, ver
+    # docs/METODOLOGIA.md secao 7), e cada tile deixa isso visivel em vez
+    # de um "atual" generico que esconderia a diferenca.
+    periodo_ipia = _mes_pt(ultimo.name)
+    periodo_cambio = _mes_pt(df_custo.index[-1]) if len(df_custo) else None
+    v_ipia = motor.classificar_ipia(ultimo)
+    v_preco = motor.classificar_preco_domestico(ultimo)
+    v_penet = motor.classificar_penetracao(ultimo)
+
     y_kpi = 0.815
-    c.kpi_tile(fig, MARGEM, y_kpi, 0.22, "IPIA", f"{ultimo['ipia']:.1f}", cor_valor=t.COR_ACCENT_2)
-    c.kpi_tile(fig, MARGEM + 0.24, y_kpi, 0.22, "SPREAD", f"R$ {spread:,.0f}/t")
+    c.kpi_tile(fig, MARGEM, y_kpi, 0.22, "IPIA", f"{ultimo['ipia']:.1f}", cor_valor=t.COR_ACCENT_2,
+              periodo=periodo_ipia, selo=c.selo_dado_texto(v_ipia.nivel, v_ipia.proxy))
+    c.kpi_tile(fig, MARGEM + 0.24, y_kpi, 0.22, "SPREAD", f"R$ {spread:,.0f}/t",
+              periodo=periodo_ipia, selo=c.selo_dado_texto(v_preco.nivel, v_preco.proxy))
     if pd.notna(penet):
         rotulo = "oficial" if tipo_penet == "oficial_mensal" else "aproximado"
-        c.kpi_tile(fig, MARGEM + 0.48, y_kpi, 0.22, "PENETRAÇÃO (PLANOS)", f"{penet:.1f}%", nota=rotulo)
+        c.kpi_tile(fig, MARGEM + 0.48, y_kpi, 0.22, "PENETRAÇÃO (PLANOS)", f"{penet:.1f}%", nota=rotulo,
+                  periodo=periodo_ipia, selo=c.selo_dado_texto(v_penet.nivel, v_penet.proxy) if v_penet else None)
     else:
-        c.kpi_tile(fig, MARGEM + 0.48, y_kpi, 0.22, "PENETRAÇÃO (PLANOS)", "n/d")
-    c.kpi_tile(fig, MARGEM + 0.72, y_kpi, 0.22, "CÂMBIO (PTAX)", f"R$ {cambio_atual:.2f}")
+        c.kpi_tile(fig, MARGEM + 0.48, y_kpi, 0.22, "PENETRAÇÃO (PLANOS)", "n/d", periodo=periodo_ipia)
+    c.kpi_tile(fig, MARGEM + 0.72, y_kpi, 0.22, "CÂMBIO (PTAX)", f"R$ {cambio_atual:.2f}",
+              periodo=periodo_cambio)  # OBSERVADO puro, sem proxy - selo vazio por definicao (ver selo_dado_texto)
 
     # IPIA
     delta_periodo = df_ipia["ipia"].iloc[-1] - df_ipia["ipia"].iloc[0]
     interp_ipia = (f"De {df_ipia['ipia'].iloc[0]:.1f} a {df_ipia['ipia'].iloc[-1]:.1f} pontos em "
                    f"{len(df_ipia)} meses ({'alta' if delta_periodo >= 0 else 'queda'} de "
                    f"{abs(delta_periodo):.1f} pts). Linha tracejada em 100 = paridade.")
-    y_top1 = c.cabecalho_grafico(fig, MARGEM, 0.760, 1 - 2 * MARGEM, "IPIA — série histórica",
+    y_top1 = c.cabecalho_grafico(fig, MARGEM, 0.740, 1 - 2 * MARGEM, "IPIA — série histórica",
                                  interpretacao=interp_ipia)
     altura1 = 0.110
     ax_ipia = fig.add_axes((MARGEM, y_top1 - altura1, 1 - 2 * MARGEM, altura1))
@@ -338,6 +393,10 @@ def pagina_series_temporais(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame,
         pmin = serie_pen["penetracao_importacao_planos_pct"].min()
         pmax = serie_pen["penetracao_importacao_planos_pct"].max()
         interp_pen = f"Variação de {pmin:.1f}% a {pmax:.1f}% no período coberto pela série."
+        # texto completo do metodo_motivo (quando o mes mais recente e
+        # aproximado_consumo_aparente) fica na pagina 4, que tem espaco de
+        # sobra - aqui so a legenda ja distingue oficial/aproximado, ver
+        # docs/adr/0008.
         legenda_pen = [
             (t.COR_APROXIMADO, "--", "o", "Aproximado (Excel — ver docs/adr/0007)"),
             (t.COR_ACCENT_2, "none", "D", "Oficial (PDF Aço Brasil)"),
@@ -446,10 +505,20 @@ def pagina_indicadores_origem(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame
                        pen_txt, cambio_txt])
 
     c.secao_titulo(fig, MARGEM, y_apos_origem - 0.035, f"ÚLTIMOS {n_meses} MESES")
-    c.tabela_simples(fig, (MARGEM, y_apos_origem - 0.05 - 0.033 * (n_meses + 1),
-                           1 - 2 * MARGEM, 0.033 * (n_meses + 1)),
+    y_tabela_bottom = y_apos_origem - 0.05 - 0.033 * (n_meses + 1)
+    c.tabela_simples(fig, (MARGEM, y_tabela_bottom, 1 - 2 * MARGEM, 0.033 * (n_meses + 1)),
                      ["Mês", "IPIA", "Spread", "Penetração", "Câmbio"], linhas,
                      alinhar_direita_a_partir_de=1)
+
+    # nota sobre a coluna Penetracao quando o mes mais recente usa formula
+    # propria (nao a oficial) - texto completo aqui, onde ha espaco de
+    # sobra (a pagina 3 so cabe a versao curta na legenda, ver
+    # docs/adr/0008)
+    v_penet_pag4 = motor.classificar_penetracao(df_ipia.iloc[-1])
+    if v_penet_pag4 is not None and v_penet_pag4.metodo_motivo:
+        c.texto_corrido(fig, MARGEM, y_tabela_bottom - 0.025, 1 - 2 * MARGEM,
+                        f"Nota sobre a coluna Penetração: {v_penet_pag4.metodo_motivo}",
+                        fontsize=7.5, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Fontes: Comex Stat (importação, origem), BCB/SGS (câmbio), releases "

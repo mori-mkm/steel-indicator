@@ -15,7 +15,7 @@ ainda, então não há "como calcular" real para documentar além da
 especificação em si (rodável via `--spec`).
 
 **Versão da metodologia**: `VERSAO_METODOLOGIA` (constante em
-`src/indices_setoriais.py`, hoje `"1.1"` — bump manual quando a
+`src/indices_setoriais.py`, hoje `"1.2"` — bump manual quando a
 metodologia de cálculo mudar, não a cada commit) é exibida no painel
 "Report Information" do relatório PDF (`--pdf-ipia`, ver
 `src/reporting/` e `docs/report_design_system.md`) como referência de
@@ -321,3 +321,28 @@ hoje é "segmento", não "produto".
 - **Meses sem PDF nem Excel do Aço Brasil disponível ficam `NaN`**: sem
   fallback silencioso — `--pdf-ipia` mostra "não disponível" nesse caso,
   nunca um número inventado.
+
+## 9. Taxonomia de proveniência e vintage por variável
+
+Ver [ADR 0008](adr/0008-taxonomia-observado-calculado-estimado-proxy-e-vintage.md)
+para a investigação e o racional completo. Resumo:
+
+- Todo número exibido no relatório PDF carrega um `reference_period`
+  próprio (o mês/janela real daquele dado específico) — variáveis
+  diferentes podem legitimamente ter meses de referência diferentes
+  (Comex Stat, IPP/IBGE e Aço Brasil têm defasagens distintas, ver
+  seção 7 acima), e o relatório mostra isso explicitamente em vez de um
+  "atual" genérico. Exceção: uma métrica que **combina** matematicamente
+  dois valores (ex. o spread da decomposição de custo) exige que os dois
+  lados venham do **mesmo** mês — nunca soma dois meses diferentes.
+- Todo número carrega dois eixos independentes de proveniência: `nivel`
+  (`OBSERVADO` → `CALCULADO` → `ESTIMADO`, mutuamente exclusivo — quanto
+  processamento o número sofreu) e `proxy` (booleano, ortogonal — o
+  escopo bate com o rótulo?). Implementado em
+  `indices_setoriais.classificar_ipia`/`classificar_preco_domestico`/
+  `classificar_custo_internacao`/`classificar_cambio`/
+  `classificar_penetracao`/`classificar_origem_importacao` e
+  `montar_tabela_vintage()`.
+- `taxa_penetracao_pct` via `aproximado_consumo_aparente` é `CALCULADO`
+  (não `ESTIMADO` nem `PROXY`) com `metodo="formula_alternativa"` — ver
+  ADR 0008 para o porquê dessa classificação específica.

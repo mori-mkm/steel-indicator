@@ -51,7 +51,7 @@ def gerar_relatorio_ipia(caminho_pdf: str, ano_ini: int = 2020, ano_fim: int = 2
     if df_ipia is None or df_custo is None or df_origem is None:
         df_bruto_comex = motor._comex_bobina_bruto(ano_ini, ano_fim)
         if df_ipia is None:
-            df_ipia = motor.calcular_ipia_mensal(ano_ini, ano_fim)
+            df_ipia = motor.calcular_ipia_mensal(ano_ini, ano_fim, df_bruto=df_bruto_comex)
         if df_custo is None:
             df_custo = motor.custo_importacao_detalhado_mensal(ano_ini, ano_fim, df_bruto=df_bruto_comex)
         if df_origem is None:

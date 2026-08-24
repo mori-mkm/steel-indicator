@@ -103,16 +103,42 @@ def rodape_pagina(fig, fontes_texto: str, pagina_num: int, data_geracao) -> None
              fontfamily=t.FONTE_SANS, ha="right", va="center")
 
 
+def selo_dado_texto(nivel: str, proxy: bool = False) -> str:
+    """Texto curto do selo de proveniencia (ex. 'CALCULADO', 'ESTIMADO ·
+    PROXY') a partir da classificacao feita pelo motor
+    (`indices_setoriais.classificar_*`, ver docs/adr/0008). Vazio para
+    OBSERVADO puro sem proxy - esse e o caso "normal", que nao precisa de
+    aviso visual. Nunca omite PROXY nem um nivel != OBSERVADO."""
+    partes = [] if nivel == "OBSERVADO" else [nivel]
+    if proxy:
+        partes.append("PROXY")
+    return " · ".join(partes)
+
+
 def kpi_tile(fig, x: float, y: float, largura: float, rotulo: str, valor_texto: str,
-            cor_valor: str = t.COR_TEXTO_PRINCIPAL, nota: Optional[str] = None) -> None:
-    """Um KPI: rotulo pequeno em cima, valor grande embaixo, nota opcional."""
+            cor_valor: str = t.COR_TEXTO_PRINCIPAL, nota: Optional[str] = None,
+            periodo: Optional[str] = None, selo: Optional[str] = None) -> None:
+    """Um KPI: rotulo pequeno em cima, valor grande embaixo, nota+periodo
+    opcionais numa linha combinada (mes/janela real desse numero
+    especifico - nunca "atual" sem qualificar) e selo opcional (texto de
+    `selo_dado_texto`, ex. "CALCULADO · PROXY"). `periodo` NAO e anexado
+    ao rotulo (rotulos longos como "PENETRAÇÃO (PLANOS)" + periodo
+    estouravam a largura da coluna e coladvam no proximo KPI - por isso
+    fica na linha de baixo, que tem mais espaco)."""
     fig.text(x, y, rotulo, transform=fig.transFigure, fontsize=8.5,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
     fig.text(x, y - 0.022, valor_texto, transform=fig.transFigure, fontsize=17,
              color=cor_valor, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
-    if nota:
-        fig.text(x, y - 0.045, nota, transform=fig.transFigure, fontsize=7.5,
+    y_linha = y - 0.045
+    complemento = " · ".join(parte for parte in (nota, periodo) if parte)
+    if complemento:
+        fig.text(x, y_linha, complemento, transform=fig.transFigure, fontsize=7.5,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+        y_linha -= 0.015
+    if selo:
+        cor_selo = t.COR_APROXIMADO if "ESTIMADO" in selo else t.COR_ACCENT_1
+        fig.text(x, y_linha, selo, transform=fig.transFigure, fontsize=7,
+                 color=cor_selo, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
 
 def caixa_destaque(fig, rect: tuple, cor_borda: str = t.COR_ACCENT_1):

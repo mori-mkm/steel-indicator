@@ -146,3 +146,32 @@ explícito — `COR_ACCENT_2` sólido para `tipo_dado_penetracao=
 `"aproximado_consumo_aparente"` — e uma legenda textual que nomeie os
 dois, nunca só a cor. Mesmo princípio de "nunca escondido" já usado no
 resto do projeto (ver `CLAUDE.md`), aplicado ao design visual.
+
+## Selo de proveniência (OBSERVADO/CALCULADO/ESTIMADO + PROXY) e período por KPI
+
+Ver [ADR 0008](adr/0008-taxonomia-observado-calculado-estimado-proxy-e-vintage.md)
+para a investigação e o racional completo da taxonomia. Regras de
+aplicação visual:
+
+- Todo `kpi_tile` que representa um número não-`OBSERVADO`-puro (ou
+  seja, `nivel != OBSERVADO` e/ou `proxy=True`) carrega um selo curto
+  (`components.selo_dado_texto`, ex. `"CALCULADO · PROXY"`) — cor
+  `COR_ACCENT_1` (ember) por padrão, `COR_APROXIMADO` quando o nível é
+  `ESTIMADO`. Um KPI `OBSERVADO` puro (ex. câmbio PTAX) não carrega
+  selo — esse é o caso "normal", que não precisa de aviso.
+- Todo `kpi_tile` carrega seu próprio `periodo` (mês/janela real daquele
+  número específico) — nunca "atual" sem qualificar, mesmo quando dois
+  tiles da mesma linha mostram períodos diferentes (ex.: página 3,
+  câmbio costuma ficar um mês à frente de IPIA/spread/penetração — ver
+  ADR 0008). `periodo` fica na linha de baixo, junto de `nota` (nunca
+  anexado ao rótulo do KPI — rótulos longos como "PENETRAÇÃO (PLANOS)"
+  com período anexado estouravam a largura da coluna e colavam no
+  próximo KPI; bug real corrigido nesta versão).
+- Limitações materiais (proxy de segmento, fórmula alternativa de fonte
+  híbrida) precisam aparecer em texto corrido em pelo menos uma página
+  fora de qualquer caixa de ressalvas isolada — hoje: uma frase solta na
+  capa (fora de qualquer caixa) e uma nota completa na página 4, além da
+  caixa de ressalvas já existente na página 2. O texto completo do
+  `metodo_motivo` de `formula_alternativa` fica só na página 4 (que tem
+  espaço de sobra) — colocá-lo na interpretação do gráfico de página 3
+  empurrava o resto da página contra o rodapé (testado e revertido).

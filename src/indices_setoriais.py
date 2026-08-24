@@ -54,11 +54,13 @@ ESCALA_A   = 50.0                           # ancora: 50 = media da janela de re
 ESCALA_B   = 10.0                           # 1 desvio-padrao = 10 pontos
 COBERTURA_MINIMA = 0.60                     # abaixo disso, nao publique o setor
 
-VERSAO_METODOLOGIA = "1.1"  # bump manual quando a metodologia de calculo mudar
+VERSAO_METODOLOGIA = "1.2"  # bump manual quando a metodologia de calculo mudar
 # (nao a cada commit) - referenciada em docs/METODOLOGIA.md e no painel
 # "Report Information" do relatorio PDF. 1.0 = motor inicial do IPIA;
 # 1.1 = suavizacao seletiva (ADR 0005) + taxa de penetracao de importacao
-# (ADR 0007).
+# (ADR 0007); 1.2 = taxonomia OBSERVADO/CALCULADO/ESTIMADO/PROXY (ADR
+# 0008) + correcao do spread da decomposicao de custo, que podia misturar
+# dois meses diferentes sem avisar (ver docs/adr/0008).
 
 # --- Series SGS do Banco Central -------------------------------------------
 # VERIFICADAS AO VIVO nesta sessao (valores de jun/2026 conferidos):
@@ -964,7 +966,8 @@ def origem_importacao_bobina_por_pais(ano_ini: int = 2020, ano_fim: int = 2026,
     return out
 
 
-def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFrame:
+def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
+                         df_bruto: pd.DataFrame | None = None) -> pd.DataFrame:
     """Calcula o IPIA mensal completo: custo de importacao real (Comex Stat +
     cambio BCB) contra a ancora de preco domestico (CSV curado + IPP).
 
@@ -972,8 +975,16 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026) -> pd.DataFra
     (`src/reporting/`) - centralizado aqui para as duas saidas nunca
     divergirem. Retorna as colunas: ipia, preco_domestico_rs_t, ppi_rs_t,
     tipo_dado_domestico, metodo_domestico, peso_confiabilidade_importacao.
+
+    df_bruto aceita o dado bruto do Comex Stat ja buscado (mesmo padrao de
+    `custo_importacao_detalhado_mensal`/`origem_importacao_bobina_por_pais`)
+    - se None, busca ao vivo. Sem isso, o relatorio PDF fazia DUAS chamadas
+    de rede para o mesmo dado (uma aqui, outra em `_comex_bobina_bruto`
+    chamado por report_builder para custo/origem) - quebrava a garantia que
+    o proprio projeto documenta ("nunca duas chamadas de rede para o mesmo
+    dado dentro do relatorio").
     """
-    bobina = serie_mensal_preco_bobina(ano_ini, ano_fim)
+    bobina = serie_mensal_preco_bobina(ano_ini, ano_fim, df_bruto=df_bruto)
     if bobina.empty:
         return bobina
     bobina = bobina.set_index("data")
@@ -1058,6 +1069,197 @@ def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
         "ppi_brl_t": custo["ppi_brl_t"],
     })
 
+
+# =============================================================================
+# 5. TAXONOMIA E VINTAGE (OBSERVADO/CALCULADO/ESTIMADO + PROXY)
+# =============================================================================
+# Ver docs/adr/0008. Dois eixos INDEPENDENTES para qualquer numero exibido
+# no relatorio - nao uma escala linear de 4 degraus:
+#   - `nivel` (mutuamente exclusivo): quanto processamento o numero sofreu.
+#   - `proxy` (booleano, ortogonal): o escopo bate com o rotulo? Pode
+#     coexistir com qualquer nivel (ex.: preco domestico num trimestre
+#     confirmado e CALCULADO + PROXY; num mes encadeado e ESTIMADO + PROXY).
+# "TUDO E VERSIONADO" ja era um principio do projeto (ver cabecalho deste
+# arquivo) - isso formaliza o que "versionado" significa por variavel, nao
+# so por publicacao inteira.
+
+NIVEL_OBSERVADO = "OBSERVADO"  # valor direto da fonte, sem calculo nosso
+NIVEL_CALCULADO = "CALCULADO"  # formula aplicada sobre observados, sem estimativa
+NIVEL_ESTIMADO  = "ESTIMADO"   # interpolado, encadeado ou suavizado
+NIVEIS_DADO = (NIVEL_OBSERVADO, NIVEL_CALCULADO, NIVEL_ESTIMADO)
+
+# metodo=METODO_FORMULA_ALTERNATIVA (ex.: taxa de penetracao via Excel do
+# Aco Brasil): mesma fonte/instituto do numero oficial, MESMO alvo
+# conceitual, mas formula propria (nao a formula oficial) - nao e nivel
+# ESTIMADO (nao ha interpolacao/encadeamento/suavizacao aqui) nem PROXY
+# (o escopo e o mesmo, so a formula difere). Ver docs/adr/0008 e
+# docs/adr/0007 para a divergencia ~1,2 p.p. ja documentada.
+METODO_FORMULA_ALTERNATIVA = "formula_alternativa"
+
+
+@dataclass
+class VintageInfo:
+    """Proveniencia de UM numero especifico exibido no relatorio - dado
+    estrutural, sem nenhuma formatacao de apresentacao (isso e
+    responsabilidade de src/reporting/, nunca do motor)."""
+    variavel: str
+    reference_period: pd.Timestamp  # mes mais recente que este numero reflete
+    fonte: str
+    nivel: str                      # NIVEL_OBSERVADO | NIVEL_CALCULADO | NIVEL_ESTIMADO
+    proxy: bool = False
+    proxy_motivo: Optional[str] = None
+    metodo: Optional[str] = None         # subtipo dentro do nivel (ex. "encadeado_ipp")
+    metodo_motivo: Optional[str] = None  # texto so quando o metodo pede explicacao (ex. formula_alternativa)
+    periodo_texto: Optional[str] = None  # rotulo para janelas (ex. origem por pais); None = mes unico
+
+
+_PROXY_MOTIVO_DOMESTICO = ('Ancora domestica e proxy do segmento "Siderurgia", nao especifica '
+                           "de bobina a quente (ver docs/adr/0003).")
+
+
+def classificar_ipia(linha: pd.Series) -> VintageInfo:
+    """linha: uma linha (Series) de `calcular_ipia_mensal()`, indexada
+    pelo mes (`linha.name`)."""
+    proxy = linha["tipo_dado_domestico"] in ("proxy_segmento_aco", "misto")
+    estimado = linha["metodo_domestico"] in ("encadeado_ipp", "hold_flat_fallback")
+    return VintageInfo(
+        variavel="ipia", reference_period=linha.name,
+        fonte="Comex Stat + BCB/SGS + CSV curado (Usiminas/CSN) + IBGE/SIDRA IPP",
+        nivel=NIVEL_ESTIMADO if estimado else NIVEL_CALCULADO,
+        proxy=proxy, proxy_motivo=_PROXY_MOTIVO_DOMESTICO if proxy else None,
+        metodo=linha["metodo_domestico"])
+
+
+def classificar_preco_domestico(linha: pd.Series) -> VintageInfo:
+    """linha: uma linha de `calcular_ipia_mensal()` (usa tipo_dado_domestico
+    e metodo_domestico) OU qualquer Series com essas duas chaves."""
+    proxy = linha["tipo_dado_domestico"] in ("proxy_segmento_aco", "misto")
+    estimado = linha["metodo_domestico"] in ("encadeado_ipp", "hold_flat_fallback")
+    return VintageInfo(
+        variavel="preco_domestico_rs_t", reference_period=linha.name,
+        fonte="Releases trimestrais Usiminas/CSN + IBGE/SIDRA IPP (encadeamento mensal)",
+        nivel=NIVEL_ESTIMADO if estimado else NIVEL_CALCULADO,
+        proxy=proxy, proxy_motivo=_PROXY_MOTIVO_DOMESTICO if proxy else None,
+        metodo=linha["metodo_domestico"])
+
+
+def classificar_custo_internacao(linha: pd.Series) -> VintageInfo:
+    """linha: uma linha de `custo_importacao_detalhado_mensal()`."""
+    return VintageInfo(
+        variavel="ppi_brl_t", reference_period=linha.name,
+        fonte="Comex Stat (FOB/frete/seguro) + BCB/SGS (cambio)",
+        nivel=NIVEL_CALCULADO, proxy=False)
+
+
+def classificar_cambio(linha: pd.Series) -> VintageInfo:
+    """linha: uma linha de `custo_importacao_detalhado_mensal()` (usa a
+    coluna `cambio`, PTAX venda lida direto do BCB/SGS - sem formula
+    nossa em cima)."""
+    return VintageInfo(
+        variavel="cambio", reference_period=linha.name,
+        fonte="BCB/SGS (PTAX venda)", nivel=NIVEL_OBSERVADO, proxy=False)
+
+
+def classificar_penetracao(linha: pd.Series) -> Optional[VintageInfo]:
+    """linha: uma linha de `calcular_ipia_mensal()`. Retorna None quando o
+    mes nao tem dado de penetracao (NaN) - nao ha o que classificar."""
+    tipo = linha.get("tipo_dado_penetracao")
+    if tipo == "oficial_mensal":
+        return VintageInfo(
+            variavel="penetracao_importacao_planos_pct", reference_period=linha.name,
+            fonte="Instituto Aço Brasil (PDF oficial, tabela 9.1)",
+            nivel=NIVEL_OBSERVADO, proxy=False, metodo="oficial_mensal")
+    if tipo == "aproximado_consumo_aparente":
+        return VintageInfo(
+            variavel="penetracao_importacao_planos_pct", reference_period=linha.name,
+            fonte="Instituto Aço Brasil (Excel \"Performance Mensal\", cálculo próprio)",
+            nivel=NIVEL_CALCULADO, proxy=False, metodo=METODO_FORMULA_ALTERNATIVA,
+            metodo_motivo=(
+                "Cálculo próprio (Importação/Consumo Aparente) sobre dado do Aço Brasil "
+                "— diverge ~1,2 p.p. do número oficial por METODOLOGIA (fórmula diferente "
+                "da usada no PDF oficial), não por confiabilidade da fonte: é o mesmo "
+                "Instituto nos dois casos. Ver docs/adr/0007."))
+    return None
+
+
+def classificar_origem_importacao(df_origem: Optional[pd.DataFrame]) -> Optional[VintageInfo]:
+    """df_origem: saida de `origem_importacao_bobina_por_pais()`. Retorna
+    None se vazio/sem janela definida."""
+    if df_origem is None or df_origem.empty:
+        return None
+    mes_fim = df_origem.attrs.get("mes_fim")
+    mes_inicio = df_origem.attrs.get("mes_inicio")
+    if mes_fim is None:
+        return None
+    return VintageInfo(
+        variavel="origem_importacao_pct", reference_period=mes_fim,
+        fonte="Comex Stat (agregado por país)", nivel=NIVEL_CALCULADO, proxy=False,
+        periodo_texto=(f"{mes_inicio:%Y-%m} a {mes_fim:%Y-%m}" if mes_inicio is not None else None))
+
+
+def montar_tabela_vintage(df_ipia: Optional[pd.DataFrame] = None,
+                          df_custo: Optional[pd.DataFrame] = None,
+                          df_origem: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """Uma linha por variavel exibida no relatorio, com reference_period,
+    fonte, nivel e proxy - a estrutura que substitui a nocao implicita de
+    "atual" por um periodo real e qualificado POR VARIAVEL (variaveis
+    diferentes podem legitimamente ter meses de referencia diferentes,
+    dado que Comex Stat/IPP/Aco Brasil tem defasagens proprias - ver
+    docs/METODOLOGIA.md secao 7). Nao e exibida como tabela no PDF; e a
+    base que os selos visuais e os selftests de reconciliacao/cutoff
+    consultam. Cada DataFrame e opcional - usa o que for passado.
+    """
+    linhas: List[VintageInfo] = []
+    if df_ipia is not None and len(df_ipia):
+        ultimo = df_ipia.iloc[-1]
+        linhas.append(classificar_ipia(ultimo))
+        linhas.append(classificar_preco_domestico(ultimo))
+        pen = classificar_penetracao(ultimo)
+        if pen is not None:
+            linhas.append(pen)
+    if df_custo is not None and len(df_custo):
+        ultimo_custo = df_custo.iloc[-1]
+        linhas.append(classificar_custo_internacao(ultimo_custo))
+        linhas.append(classificar_cambio(ultimo_custo))
+    origem_info = classificar_origem_importacao(df_origem)
+    if origem_info is not None:
+        linhas.append(origem_info)
+    return pd.DataFrame([{
+        "variavel": v.variavel, "reference_period": v.reference_period, "fonte": v.fonte,
+        "nivel": v.nivel, "proxy": v.proxy, "proxy_motivo": v.proxy_motivo,
+        "metodo": v.metodo, "metodo_motivo": v.metodo_motivo, "periodo_texto": v.periodo_texto,
+    } for v in linhas])
+
+
+def validar_report_cutoff(tabela_vintage: pd.DataFrame, report_cutoff: pd.Timestamp) -> List[str]:
+    """Lista as variaveis cuja `reference_period` e POSTERIOR ao mes do
+    `report_cutoff` - nunca deveria acontecer (seria usar dado que ainda
+    nao existia na data de geracao da edicao, look-ahead). Lista vazia =
+    tudo dentro do cutoff."""
+    cutoff_mes = pd.Timestamp(report_cutoff.year, report_cutoff.month, 1)
+    problema = tabela_vintage[tabela_vintage["reference_period"] > cutoff_mes]
+    return problema["variavel"].tolist()
+
+
+def checar_reconciliacao_spread(df_ipia: pd.DataFrame, df_custo: pd.DataFrame) -> bool:
+    """O spread mostrado na decomposicao de custo (preco domestico - custo
+    de internacao) tem que bater com o mesmo calculo dentro de
+    `df_ipia`, no MESMO mes - nunca comparar `df_ipia.iloc[-1]` com
+    `df_custo.iloc[-1]` as cegas (podem ser meses diferentes, ja que
+    `calcular_ipia_mensal` intersecta bobina x domestico enquanto
+    `custo_importacao_detalhado_mensal` nao). Retorna False (incluindo)
+    se o mes de `df_ipia` nem existir em `df_custo`.
+    """
+    if df_ipia.empty:
+        return False
+    mes = df_ipia.index[-1]
+    if mes not in df_custo.index:
+        return False
+    spread_ipia = df_ipia.loc[mes, "preco_domestico_rs_t"] - df_ipia.loc[mes, "ppi_rs_t"]
+    spread_custo = df_ipia.loc[mes, "preco_domestico_rs_t"] - df_custo.loc[mes, "ppi_brl_t"]
+    return abs(float(spread_ipia) - float(spread_custo)) < 1e-6
+
+
 def _serie_sintetica(n=180, seed=0, tendencia=0.0, nivel=10.0, ruido=1.0):
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2012-01-01", periods=n, freq="MS")
@@ -1067,6 +1269,11 @@ def _serie_sintetica(n=180, seed=0, tendencia=0.0, nivel=10.0, ruido=1.0):
 
 
 def selftest() -> int:
+    # declarado no topo porque a secao 20 monkeypatcha e restaura esses
+    # nomes de modulo temporariamente (Python exige global antes de
+    # qualquer uso do nome na funcao, e as secoes anteriores ja usam
+    # taxa_penetracao_importacao_planos_mensal)
+    global comex_importacao_ncm, sgs, ibge_sidra_ipp_metalurgia, taxa_penetracao_importacao_planos_mensal
     print("=" * 74)
     print(" AUTOTESTE - validacao da matematica do motor de indices")
     print("=" * 74)
@@ -1545,6 +1752,143 @@ def selftest() -> int:
           f"x0={ax_longo.get_position().x0:.4f}, rotulo_pt={rotulo_mais_largo_pt:.1f}")
     plt.close(fig_rotulo_curto)
     plt.close(fig_rotulo_longo)
+
+    # --- 20. calcular_ipia_mensal(df_bruto=...) nao chama o Comex Stat de
+    # novo -------------------------------------------------------------
+    # bug real: calcular_ipia_mensal nao repassava df_bruto para
+    # serie_mensal_preco_bobina, entao o relatorio PDF buscava o MESMO
+    # dado bruto do Comex Stat duas vezes (uma aqui, outra em
+    # _comex_bobina_bruto para custo/origem) - quebrava a garantia que o
+    # proprio docstring de report_builder promete ("nunca duas chamadas de
+    # rede para o mesmo dado"). Bloqueia comex_importacao_ncm (deve
+    # explodir se for chamado) e substitui sgs/ibge/penetracao por stubs
+    # sinteticos so para isolar esse teste de rede real - CSV curado
+    # continua sendo o real (nao e rede, e arquivo versionado).
+    _comex_original = comex_importacao_ncm
+    _sgs_original = sgs
+    _ibge_original = ibge_sidra_ipp_metalurgia
+    _penet_original = taxa_penetracao_importacao_planos_mensal
+    _chamadas_comex = {"n": 0}
+
+    def _comex_bloqueado(ncm, ano_ini, ano_fim):
+        _chamadas_comex["n"] += 1
+        raise AssertionError("comex_importacao_ncm nao deveria ser chamado com df_bruto fornecido")
+
+    def _sgs_stub(codigo, inicio="01/01/2010"):
+        return pd.Series([5.10], index=[pd.Timestamp("2020-01-01")], name=f"sgs_{codigo}")
+
+    def _ibge_stub(periodos="all"):
+        return pd.Series(dtype=float)
+
+    def _penet_stub(ano_ini=2013, ano_fim=None, df_historico=None, df_oficial=None):
+        return pd.DataFrame({"taxa_penetracao_pct": pd.Series(dtype=float),
+                             "tipo_dado_penetracao": pd.Series(dtype=object)})
+
+    df_bruto_teste = pd.DataFrame({
+        "year":            [2026, 2026, 2026],
+        "monthNumber":     [6, 6, 6],
+        "metricFOB":       [600000.0, 610000.0, 590000.0],
+        "metricKG":        [1000000.0, 1020000.0, 980000.0],
+        "metricFreight":   [40000.0, 41000.0, 39000.0],
+        "metricInsurance": [4000.0, 4100.0, 3900.0],
+        "country":         ["China", "Coreia do Sul", "Egito"],
+    })
+
+    comex_importacao_ncm = _comex_bloqueado
+    sgs = _sgs_stub
+    ibge_sidra_ipp_metalurgia = _ibge_stub
+    taxa_penetracao_importacao_planos_mensal = _penet_stub
+    try:
+        resultado_dedup = calcular_ipia_mensal(2026, 2026, df_bruto=df_bruto_teste)
+    finally:
+        comex_importacao_ncm = _comex_original
+        sgs = _sgs_original
+        ibge_sidra_ipp_metalurgia = _ibge_original
+        taxa_penetracao_importacao_planos_mensal = _penet_original
+
+    check("calcular_ipia_mensal(df_bruto=...) nunca chama comex_importacao_ncm de novo "
+          "(evita a 2a chamada de rede que o relatorio PDF fazia)",
+          _chamadas_comex["n"] == 0, f"chamadas = {_chamadas_comex['n']}")
+    check("calcular_ipia_mensal(df_bruto=...) ainda produz resultado valido com o dado injetado",
+          not resultado_dedup.empty and pd.Timestamp("2026-06-01") in resultado_dedup.index,
+          f"len = {len(resultado_dedup)}")
+
+    # --- 21. vintage: reconciliacao do spread + deteccao de cutoff violado
+    # (ver docs/adr/0008) -------------------------------------------------
+    # bug historico real (pagina 2 do relatorio, corrigido nesta versao):
+    # usar df_custo.iloc[-1] junto de df_ipia.iloc[-1] sem checar se e o
+    # MESMO mes produzia um "spread" que somava dois meses diferentes -
+    # df_custo tem um mes A MAIS (julho) que df_ipia nao tem, porque
+    # calcular_ipia_mensal intersecta bobina x domestico (mais lento) e
+    # custo_importacao_detalhado_mensal nao intersecta nada.
+    idx_reconc = pd.date_range("2026-05-01", periods=2, freq="MS")
+    df_ipia_reconc = pd.DataFrame({
+        "preco_domestico_rs_t": [5000.0, 5236.0],
+        "ppi_rs_t": [3600.0, 3728.0],
+        "ipia": [138.9, 140.4],
+        "tipo_dado_domestico": ["proxy_segmento_aco", "proxy_segmento_aco"],
+        "metodo_domestico": ["nivel_trimestral", "nivel_trimestral"],
+    }, index=idx_reconc)
+    idx_custo_reconc = pd.date_range("2026-05-01", periods=3, freq="MS")  # 1 mes a mais que df_ipia
+    df_custo_reconc = pd.DataFrame({
+        "ppi_brl_t": [3600.0, 3728.0, 3806.0],
+    }, index=idx_custo_reconc)
+
+    check("(a) reconciliacao: spread usando df_custo.loc[mesmo mes de df_ipia] bate com o proprio df_ipia",
+          checar_reconciliacao_spread(df_ipia_reconc, df_custo_reconc))
+
+    spread_correto = df_ipia_reconc["preco_domestico_rs_t"].iloc[-1] - df_ipia_reconc["ppi_rs_t"].iloc[-1]
+    spread_do_bug_antigo = df_ipia_reconc["preco_domestico_rs_t"].iloc[-1] - df_custo_reconc["ppi_brl_t"].iloc[-1]
+    check("(a) contraprova: o padrao antigo (iloc[-1] em cada DataFrame, sem casar o mes) de fato NAO reconciliava",
+          abs(spread_correto - spread_do_bug_antigo) > 1.0,
+          f"spread correto={spread_correto:.1f}, spread do bug antigo={spread_do_bug_antigo:.1f}")
+
+    tabela_vintage_teste = montar_tabela_vintage(df_ipia_reconc, df_custo_reconc)
+    cutoff_valido = pd.Timestamp("2026-07-15")  # cobre o mes mais recente de QUALQUER variavel (df_custo vai ate julho)
+    check("(b) validar_report_cutoff: nenhum problema quando reference_period <= cutoff",
+          len(validar_report_cutoff(tabela_vintage_teste, cutoff_valido)) == 0,
+          f"problemas={validar_report_cutoff(tabela_vintage_teste, cutoff_valido)}")
+
+    cutoff_anterior = pd.Timestamp("2026-05-15")  # anterior ao mes de df_ipia (2026-06) -> look-ahead
+    problemas_cutoff = validar_report_cutoff(tabela_vintage_teste, cutoff_anterior)
+    check("(b) validar_report_cutoff: detecta reference_period posterior ao cutoff (look-ahead)",
+          len(problemas_cutoff) > 0, f"problemas={problemas_cutoff}")
+
+    # --- 22. selo visual nunca omite PROXY/ESTIMADO quando a classificacao
+    # do motor indica isso (ver docs/adr/0008) - end-to-end: classificacao
+    # real -> texto do selo, nao so testa o renderizador isolado ---------
+    from reporting import components as rep_components2
+
+    linha_proxy_teste = pd.Series(
+        {"tipo_dado_domestico": "proxy_segmento_aco", "metodo_domestico": "nivel_trimestral"},
+        name=pd.Timestamp("2026-06-01"))
+    v_proxy = classificar_preco_domestico(linha_proxy_teste)
+    check("(c) selo nunca omite PROXY quando tipo_dado_domestico e proxy_segmento_aco",
+          "PROXY" in rep_components2.selo_dado_texto(v_proxy.nivel, v_proxy.proxy),
+          f"selo='{rep_components2.selo_dado_texto(v_proxy.nivel, v_proxy.proxy)}'")
+
+    linha_estimado_teste = pd.Series(
+        {"tipo_dado_domestico": "especifico_laminado_quente", "metodo_domestico": "hold_flat_fallback"},
+        name=pd.Timestamp("2026-07-01"))
+    v_estimado = classificar_preco_domestico(linha_estimado_teste)
+    check("(d) selo nunca omite ESTIMADO quando metodo_domestico e hold_flat_fallback",
+          "ESTIMADO" in rep_components2.selo_dado_texto(v_estimado.nivel, v_estimado.proxy),
+          f"selo='{rep_components2.selo_dado_texto(v_estimado.nivel, v_estimado.proxy)}'")
+
+    linha_observado_teste = pd.Series({"tipo_dado_penetracao": "oficial_mensal"},
+                                      name=pd.Timestamp("2026-07-01"))
+    v_observado = classificar_penetracao(linha_observado_teste)
+    check("selo fica vazio (sem aviso) para OBSERVADO puro sem proxy - caso normal nao precisa de selo",
+          rep_components2.selo_dado_texto(v_observado.nivel, v_observado.proxy) == "")
+
+    linha_formula_alt_teste = pd.Series({"tipo_dado_penetracao": "aproximado_consumo_aparente"},
+                                        name=pd.Timestamp("2026-06-01"))
+    v_formula_alt = classificar_penetracao(linha_formula_alt_teste)
+    check("(d) formula_alternativa (aproximado_consumo_aparente) classifica como CALCULADO, nao ESTIMADO nem PROXY "
+          "(nao ha interpolacao/encadeamento aqui, e o mesmo alvo conceitual do oficial - so formula diferente)",
+          v_formula_alt.nivel == NIVEL_CALCULADO and not v_formula_alt.proxy
+          and v_formula_alt.metodo == METODO_FORMULA_ALTERNATIVA,
+          f"nivel={v_formula_alt.nivel}, proxy={v_formula_alt.proxy}, metodo={v_formula_alt.metodo}")
 
     print("-" * 74)
     if falhas:
