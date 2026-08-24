@@ -1,7 +1,7 @@
 # Design system do relatório PDF do IPIA
 
 Tokens de design usados por `src/reporting/theme.py` para o relatório de
-3 páginas gerado por `--pdf-ipia`. Derivado de análise visual de 3
+4 páginas gerado por `--pdf-ipia`. Derivado de análise visual de 3
 relatórios reais da S&P Global Ratings (`references/report_design/` —
 fora do Git, referência estrutural/visual apenas: nenhum logo, texto,
 foto ou cor de marca da S&P foi reaproveitado; a identidade abaixo
@@ -21,7 +21,14 @@ foto ou cor de marca da S&P foi reaproveitado; a identidade abaixo
 - Gráficos sem moldura, só grade horizontal cinza clara; paleta
   categórica pequena (poucas cores saturadas); legenda simples ao lado;
   título do gráfico em serif, subtítulo em sans cinza; nota/fonte em
-  cinza pequeno abaixo.
+  cinza pequeno abaixo. **Nota (ago/2026)**: "legenda ao lado" é o que as
+  referências mostravam estruturalmente — o IPIA adotou uma variação
+  própria (legenda numa linha horizontal ACIMA da área de plotagem, nunca
+  ao lado nem sobreposta aos dados), ver "Cabeçalho de gráfico" abaixo.
+  Isso não é uma correção de uma regra pré-existente violada — é uma
+  convenção nova, adotada depois que uma legenda posicionada dentro do
+  eixo (`loc="upper left"`) colidiu com a própria linha plotada num
+  gráfico real do relatório.
 - Rodapé consistente em todas as páginas (marca/URL à esquerda, data +
   nº de página à direita); cabeçalho pequeno com o nome do relatório no
   topo das páginas internas.
@@ -67,12 +74,68 @@ diferenciação serif/sans), nunca quebra a geração do PDF.
 
 - Tamanho de página: A4 retrato, `8.27 × 11.69 in` (mesmo formato já
   usado no relatório de 1 página anterior).
-- Margem única: `0.65 in` em todos os lados, nas 3 páginas.
+- Margem única: `0.65 in` em todos os lados, nas 4 páginas.
 - Banda de topo (`COR_BANDA_TOPO`): só na página 1 (capa).
 - Cabeçalho pequeno (nome do relatório, `COR_TEXTO_SECUNDARIO`): páginas
-  2 e 3 (internas).
+  2, 3 e 4 (internas).
 - Rodapé (marca à esquerda, data + nº de página à direita,
-  `COR_TEXTO_SECUNDARIO`): as 3 páginas.
+  `COR_TEXTO_SECUNDARIO`): as 4 páginas.
+- 4 páginas: capa, decomposição de custo, séries temporais, indicadores e
+  origem — ver "Por que a página de dashboard virou duas" abaixo.
+
+## Caixas de texto: altura e quebra de linha derivadas do conteúdo
+
+`components.caixa_texto` / `callout_numerado` (usados pela caixa "o que o
+IPIA mede", pelos callouts numerados de "O QUE MUDOU" e pelas caixas de
+ressalva) **nunca** recebem uma altura fixa escolhida a dedo, nem quebram
+linha por contagem de caracteres. A largura de quebra é derivada da
+largura real da caixa (em pontos, na fonte/tamanho usados — medida via
+`matplotlib.textpath.TextPath`, sem precisar de canvas/renderer) e a
+altura da caixa é derivada do número de linhas resultante. Isso evita as
+duas falhas visuais que motivaram a correção: texto estourando a borda
+(largura de quebra desalinhada da largura real da caixa) e caixa maior
+que o necessário (altura fixa que sobrava espaço vazio quando o texto era
+curto). Toda função que desenha essas caixas retorna a coordenada Y da
+borda inferior real, para o chamador encadear o próximo elemento sem
+adivinhar — uma posição Y fixa abaixo de uma caixa de altura dinâmica é
+o jeito mais fácil de reintroduzir sobreposição.
+
+## Cabeçalho de gráfico: título + interpretação + legenda
+
+Todo gráfico do relatório usa `components.cabecalho_grafico` para
+desenhar, nesta ordem, ACIMA da área de plotagem (nunca dentro do
+`Axes`, nunca sobrepondo dado): (1) título em serif; (2) uma linha curta
+de interpretação em sans cinza, sempre derivada de valor real já
+calculado (mínimo/máximo, direção, líder) — nunca uma frase decorativa
+sem número; (3) legenda horizontal, quando o gráfico tem mais de uma
+série, com swatches de linha/marcador + rótulo, também acima da área de
+plotagem. A função devolve a coordenada Y onde o `Axes` do gráfico deve
+começar, então o eixo em si nunca tem `set_title`/`legend` próprios — só
+os componentes `grafico_linha`/`grafico_barras_*` cuidam da série de
+dados. Todo gráfico do relatório também precisa de pelo menos uma menção
+no texto corrido da página (fora do próprio cabeçalho do gráfico) que
+referencie o que ele mostra — nunca um gráfico puramente decorativo sem
+nenhuma frase apontando para ele.
+
+## Por que a página de dashboard virou duas
+
+A antiga página única "Dashboard — Série Histórica e Indicadores"
+(4 KPIs + 3 gráficos de linha + gráfico de barras horizontais + rodapé,
+tudo num A4) ficou densa demais depois que título+interpretação de cada
+gráfico passaram a ocupar espaço próprio fora do eixo (ver seção
+anterior) — não cabia mais sem espremer. Dividida em:
+
+- **Página 3 — Séries Temporais**: KPIs (ponto atual de cada métrica) +
+  os 3 gráficos de evolução mensal (IPIA, penetração de importação,
+  câmbio). Pergunta que essa página responde: "como cada série andou no
+  tempo".
+- **Página 4 — Indicadores e Origem das Importações**: gráfico de origem
+  geográfica (agora com espaço de sobra, em vez de espremido no rodapé da
+  página única) + tabela de recapitulação dos últimos 6 meses (mesmos
+  dados já usados nas páginas anteriores, sem recálculo). Pergunta que
+  essa página responde: "de onde vem a importação e onde estamos agora".
+
+A mesma justificativa está no docstring de `pages.pagina_series_temporais`.
 
 ## Regra de uso do selo oficial/aproximado
 

@@ -31,7 +31,7 @@
    python indices_setoriais.py --check-sources   # testa as APIs publicas
    python indices_setoriais.py --iccs            # calcula o ICCS
    python indices_setoriais.py --ipia            # calcula o IPIA
-   python indices_setoriais.py --pdf-ipia        # gera relatorio PDF de 1 pagina do IPIA
+   python indices_setoriais.py --pdf-ipia        # gera relatorio PDF de 4 paginas do IPIA
 
  Dependencias: pandas, numpy, requests, matplotlib  (statsmodels opcional, p/ ajuste sazonal)
 =============================================================================
@@ -1367,7 +1367,7 @@ def selftest() -> int:
     check("integracao ancora domestica + custo de importacao nao quebra a aritmetica do ipia()",
           bool(((ix_rt - esperado_ix_rt).abs() < 1e-9).all()))
 
-    # --- 15. geracao do relatorio PDF do IPIA (3 paginas, src/reporting/) ---
+    # --- 15. geracao do relatorio PDF do IPIA (4 paginas, src/reporting/) ---
     from reporting.report_builder import gerar_relatorio_ipia
     idx_pdf = pd.date_range("2026-01-01", periods=6, freq="MS")
     df_ipia_pdf = pd.DataFrame({
@@ -1406,7 +1406,7 @@ def selftest() -> int:
         n_meses = gerar_relatorio_ipia(tmp_pdf_path, df_ipia=df_ipia_pdf,
                                        df_custo=df_custo_pdf, df_origem=df_origem_pdf)
         tamanho = _os.path.getsize(tmp_pdf_path)
-        check("relatorio PDF do IPIA (3 paginas) e gerado sem erro e nao esta vazio",
+        check("relatorio PDF do IPIA (4 paginas) e gerado sem erro e nao esta vazio",
               _os.path.exists(tmp_pdf_path) and tamanho > 0 and n_meses == 6,
               f"tamanho = {tamanho} bytes, n_meses = {n_meses}")
     finally:
@@ -1510,6 +1510,42 @@ def selftest() -> int:
     check("penetracao combinada: nao duplica o mes sobreposto (3 meses no total, nao 4)",
           len(combinado_penet) == 3, f"len = {len(combinado_penet)}")
 
+    # --- 19. grafico_barras_horizontais: margem esquerda dinamica ------------
+    # bug real de producao: "Coreia do Sul" (rotulo longo) era cortado na
+    # borda da pagina porque a margem esquerda do grafico de origem das
+    # importacoes era um deslocamento fixo, sem relacao com o rotulo mais
+    # largo de fato presente na edicao. Testa que o inset cresce quando um
+    # rotulo mais largo aparece nos dados - a correcao mede o rotulo de
+    # verdade (TextPath), nao chuta um numero fixo.
+    import matplotlib
+    matplotlib.use("Agg")
+    matplotlib.rcParams["text.parse_math"] = False
+    import matplotlib.pyplot as plt
+    from reporting import components as rep_components
+    from reporting import theme as rep_theme
+
+    fig_rotulo_curto = plt.figure(figsize=(rep_theme.LARGURA_POL, rep_theme.ALTURA_POL))
+    ax_curto = rep_components.grafico_barras_horizontais(
+        fig_rotulo_curto, 0.1, 0.1, 0.8, 0.2, ["China", "Egito"], [50.0, 13.3])
+    inset_curto = ax_curto.get_position().x0 - 0.1
+
+    fig_rotulo_longo = plt.figure(figsize=(rep_theme.LARGURA_POL, rep_theme.ALTURA_POL))
+    ax_longo = rep_components.grafico_barras_horizontais(
+        fig_rotulo_longo, 0.1, 0.1, 0.8, 0.2, ["China", "Coreia do Sul"], [50.0, 24.4])
+    inset_longo = ax_longo.get_position().x0 - 0.1
+    rotulo_mais_largo_pt = rep_components._largura_texto_pt("Coreia do Sul", 8.5, rep_theme.FONTE_SANS)
+
+    check("grafico_barras_horizontais: margem esquerda cresce para rotulo mais largo "
+          "('Coreia do Sul' vs. 'Egito')",
+          inset_longo > inset_curto,
+          f"inset_curto={inset_curto:.4f}, inset_longo={inset_longo:.4f}")
+    check("grafico_barras_horizontais: axes nao invade o espaco reservado ao rotulo "
+          "mais largo ('Coreia do Sul' cabe sem cortar)",
+          ax_longo.get_position().x0 > 0.1,
+          f"x0={ax_longo.get_position().x0:.4f}, rotulo_pt={rotulo_mais_largo_pt:.1f}")
+    plt.close(fig_rotulo_curto)
+    plt.close(fig_rotulo_longo)
+
     print("-" * 74)
     if falhas:
         print(f" RESULTADO: {len(falhas)} FALHA(S): {falhas}")
@@ -1583,7 +1619,7 @@ def main():
     ap.add_argument("--ipia", action="store_true",
                      help="calcula o IPIA completo (custo de importacao + ancora domestica) e salva em data/processed/")
     ap.add_argument("--pdf-ipia", action="store_true",
-                     help="calcula o IPIA e gera relatorio PDF de 1 pagina em data/processed/ipia_relatorio.pdf")
+                     help="calcula o IPIA e gera relatorio PDF de 4 paginas em data/processed/ipia_relatorio.pdf")
     ap.add_argument("--ano-ini", type=int, default=2020)
     ap.add_argument("--ano-fim", type=int, default=2026)
     a = ap.parse_args()
@@ -1631,7 +1667,7 @@ def main():
         print(f"\nSalvo em {caminho} ({len(out)} meses)")
         sys.exit(0)
     if a.pdf_ipia:
-        print(f"Gerando relatorio PDF do IPIA (3 paginas), {a.ano_ini}-{a.ano_fim} ...")
+        print(f"Gerando relatorio PDF do IPIA (4 paginas), {a.ano_ini}-{a.ano_fim} ...")
         # import local: reporting/ importa deste modulo (indices_setoriais.py
         # e so o motor de calculo, nunca importa reporting no nivel de modulo -
         # evita import circular, mesmo padrao ja usado para matplotlib/requests).

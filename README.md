@@ -65,7 +65,7 @@ python src/indices_setoriais.py --check-sources      # testa as APIs públicas (
 python src/indices_setoriais.py --preview-bobina      # série mensal de preço de importação (Comex Stat)
 python src/indices_setoriais.py --preview-domestico   # série mensal de preço doméstico (curado + IPP)
 python src/indices_setoriais.py --ipia                # calcula o IPIA completo -> data/processed/ipia_mensal.csv
-python src/indices_setoriais.py --pdf-ipia             # relatório PDF de 1 página -> data/processed/ipia_relatorio.pdf
+python src/indices_setoriais.py --pdf-ipia             # relatório PDF de 4 páginas -> data/processed/ipia_relatorio.pdf
 python src/indices_setoriais.py --spec                # imprime a especificação do ICCS (pilares/pesos/fontes)
 ```
 
