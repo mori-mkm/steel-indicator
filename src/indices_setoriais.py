@@ -49,6 +49,10 @@ from steel_indicator.domain.index_engine import (
     Variavel, Pilar, EspecIndice, aplicar_transform, zscore_janela_fixa,
     agregar, validar_com_pca, diagnostico_antecedencia,
 )
+from steel_indicator.domain.provenance import (
+    NIVEL_OBSERVADO, NIVEL_CALCULADO, NIVEL_ESTIMADO, NIVEIS_DADO,
+    METODO_FORMULA_ALTERNATIVA, VintageInfo, vintage_table, validar_report_cutoff,
+)
 
 # =============================================================================
 # 0. CONFIGURACAO
@@ -927,39 +931,17 @@ def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
 #   - `proxy` (booleano, ortogonal): o escopo bate com o rotulo? Pode
 #     coexistir com qualquer nivel (ex.: preco domestico num trimestre
 #     confirmado e CALCULADO + PROXY; num mes encadeado e ESTIMADO + PROXY).
-# "TUDO E VERSIONADO" ja era um principio do projeto (ver cabecalho deste
-# arquivo) - isso formaliza o que "versionado" significa por variavel, nao
-# so por publicacao inteira.
-
-NIVEL_OBSERVADO = "OBSERVADO"  # valor direto da fonte, sem calculo nosso
-NIVEL_CALCULADO = "CALCULADO"  # formula aplicada sobre observados, sem estimativa
-NIVEL_ESTIMADO  = "ESTIMADO"   # interpolado, encadeado ou suavizado
-NIVEIS_DADO = (NIVEL_OBSERVADO, NIVEL_CALCULADO, NIVEL_ESTIMADO)
-
-# metodo=METODO_FORMULA_ALTERNATIVA (ex.: taxa de penetracao via Excel do
-# Aco Brasil): mesma fonte/instituto do numero oficial, MESMO alvo
-# conceitual, mas formula propria (nao a formula oficial) - nao e nivel
-# ESTIMADO (nao ha interpolacao/encadeamento/suavizacao aqui) nem PROXY
-# (o escopo e o mesmo, so a formula difere). Ver docs/adr/0008 e
-# docs/adr/0007 para a divergencia ~1,2 p.p. ja documentada.
-METODO_FORMULA_ALTERNATIVA = "formula_alternativa"
-
-
-@dataclass
-class VintageInfo:
-    """Proveniencia de UM numero especifico exibido no relatorio - dado
-    estrutural, sem nenhuma formatacao de apresentacao (isso e
-    responsabilidade de src/reporting/, nunca do motor)."""
-    variavel: str
-    reference_period: pd.Timestamp  # mes mais recente que este numero reflete
-    fonte: str
-    nivel: str                      # NIVEL_OBSERVADO | NIVEL_CALCULADO | NIVEL_ESTIMADO
-    proxy: bool = False
-    proxy_motivo: Optional[str] = None
-    metodo: Optional[str] = None         # subtipo dentro do nivel (ex. "encadeado_ipp")
-    metodo_motivo: Optional[str] = None  # texto so quando o metodo pede explicacao (ex. formula_alternativa)
-    periodo_texto: Optional[str] = None  # rotulo para janelas (ex. origem por pais); None = mes unico
-
+#
+# O contrato generico (NIVEL_*, NIVEIS_DADO, METODO_FORMULA_ALTERNATIVA,
+# VintageInfo, vintage_table, validar_report_cutoff) foi extraido para
+# steel_indicator/domain/provenance.py (Spec 0003, batch 2) - importado
+# acima. As funcoes classificar_* abaixo permanecem AQUI de proposito: elas
+# decidem nivel/proxy a partir de vocabulario especifico do IPIA-HRC V1
+# (tipo_dado_domestico, metodo_domestico, tipo_dado_penetracao), que a
+# metodologia ja marca como nao-permanente (ver docs/METODOLOGIA.md secao
+# 12.5/26). Mover essa decisao para o contrato compartilhado do domain
+# encodaria premissa do IPIA V1 como se fosse contrato generico de
+# ICCS/ICS - ver docs/specs/0003-modularize-engine.md secao 3.
 
 _PROXY_MOTIVO_DOMESTICO = ('Ancora domestica e proxy do segmento "Siderurgia", nao especifica '
                            "de bobina a quente (ver docs/adr/0003).")
@@ -1072,21 +1054,7 @@ def montar_tabela_vintage(df_ipia: Optional[pd.DataFrame] = None,
     origem_info = classificar_origem_importacao(df_origem)
     if origem_info is not None:
         linhas.append(origem_info)
-    return pd.DataFrame([{
-        "variavel": v.variavel, "reference_period": v.reference_period, "fonte": v.fonte,
-        "nivel": v.nivel, "proxy": v.proxy, "proxy_motivo": v.proxy_motivo,
-        "metodo": v.metodo, "metodo_motivo": v.metodo_motivo, "periodo_texto": v.periodo_texto,
-    } for v in linhas])
-
-
-def validar_report_cutoff(tabela_vintage: pd.DataFrame, report_cutoff: pd.Timestamp) -> List[str]:
-    """Lista as variaveis cuja `reference_period` e POSTERIOR ao mes do
-    `report_cutoff` - nunca deveria acontecer (seria usar dado que ainda
-    nao existia na data de geracao da edicao, look-ahead). Lista vazia =
-    tudo dentro do cutoff."""
-    cutoff_mes = pd.Timestamp(report_cutoff.year, report_cutoff.month, 1)
-    problema = tabela_vintage[tabela_vintage["reference_period"] > cutoff_mes]
-    return problema["variavel"].tolist()
+    return vintage_table(linhas)
 
 
 def checar_reconciliacao_spread(df_ipia: pd.DataFrame, df_custo: pd.DataFrame) -> bool:
