@@ -56,6 +56,7 @@ from steel_indicator.domain.provenance import (
 from steel_indicator.sources.comex import COMEX_URL, comex_importacao_ncm
 from steel_indicator.parameters.trade_policy import (
     resolver_ii, resolver_afrmm, resolver_antidumping, status_efetivo, STATUS_UNKNOWN,
+    STATUS_PUBLICATION_GRADE, STATUS_EXPERIMENTAL, PUBLICATION_GRADE_INICIO,
 )
 
 # =============================================================================
@@ -1021,6 +1022,215 @@ def calcular_ipia_hrc_v2(ncm: str, ano_ini: int = 2020, ano_fim: int = 2026,
         "tipo_dado_domestico": domestico.loc[idx, "tipo_dado"],
         "metodo_domestico": domestico.loc[idx, "metodo"],
     })
+
+
+# =============================================================================
+# 3c. IPIA-HRC V2 - agregador bottom-up multi-NCM (Stage E7, ADR 0009)
+# =============================================================================
+# `calcular_ipia_hrc_v2` (acima) aplica a aliquota de UM NCM escolhido pelo
+# chamador ao CIF ja combinado dos 13 NCMs - e a limitacao de representati-
+# vidade documentada no adendo Stage E6 do ADR 0009. As funcoes abaixo
+# implementam a decisao Level 3 aprovada para resolver isso: resolve
+# II (por NCM)/AFRMM (por mes)/antidumping (por pais) ANTES de agregar,
+# por (mes, ncm, pais) - nunca "NCM representativo", nunca media simples,
+# nunca uma unica aliquota aplicada ao CIF ja combinado.
+
+# ADR 0009: unico intervalo documentado (Nota Tecnica 1/2018) para os 9 NCMs
+# de NCM_BOBINA_QUENTE sem II individual comprovado entre 2012-01 e 2022-03 -
+# nunca um ponto central (12%) tratado como valor conhecido.
+FAIXA_II_NAO_CONFIRMADO_HISTORICO = (0.10, 0.14)
+LIMIAR_COBERTURA_EXPERIMENTAL = 0.60      # decisao Level 3 aprovada
+LIMIAR_INCERTEZA_EXPERIMENTAL_PCT = 0.02  # decisao Level 3 aprovada
+TOL_COBERTURA_PUBLICATION_GRADE = 1e-6    # tolerancia numerica para "100% do kg observado com politica conhecida"
+
+
+def _ppi_brl_t(cif_brl_t, aliquota_ii, frete_usd_t, cambio_mes, aliquota_afrmm, antidumping_usd_t, p: ParamsIPIA):
+    """Mesma formula de custo de internacao de `custo_importacao_rs_t`/
+    `custo_importacao_historico_mensal` (CIF -> base -> total com margem),
+    fatorada para aceitar uma aliquota_ii hipotetica - usada tambem pela
+    faixa de incerteza (ppi_lower/ppi_upper) do periodo experimental."""
+    ii = cif_brl_t * aliquota_ii
+    afrmm = (frete_usd_t * cambio_mes) * aliquota_afrmm
+    ad_brl = antidumping_usd_t * cambio_mes
+    base = cif_brl_t + ii + afrmm + ad_brl + p.despesas_porto_rs_t + p.frete_interno_rs_t
+    return base * (1 + p.margem_importador)
+
+
+def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
+                                       p: Optional[ParamsIPIA] = None,
+                                       exporter: Optional[str] = None) -> pd.DataFrame:
+    """Uma linha por (mes, ncm, pais) com custo de internacao unitario (R$/t)
+    e status, resolvendo II/AFRMM/antidumping via trade_policy ANTES de
+    qualquer soma entre NCMs ou paises (ADR 0009, decisao Level 3 do
+    agregador bottom-up). `df_bruto` e o dado cru do Comex Stat (mesmo
+    formato de `_comex_bobina_bruto`: colunas year/monthNumber/ncm/country/
+    metricFOB/metricKG/metricFreight/metricInsurance) - `coNcm`/`country`
+    sao preservados aqui, ao contrario de `serie_mensal_preco_bobina`, que
+    os descarta na agregacao mensal.
+
+    Grupos com kg<=0 ou cujo mes nao tem cambio disponivel em `cambio` sao
+    descartados (peso zero ou dado faltante nunca e fabricado).
+    """
+    if p is None:
+        p = ParamsIPIA()
+    df = df_bruto.copy()
+    for col in ("metricFOB", "metricKG", "metricFreight", "metricInsurance"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["data"] = pd.to_datetime(df["year"].astype(str) + "-"
+                                 + df["monthNumber"].astype(str).str.zfill(2) + "-01")
+    g = (df.groupby(["data", "ncm", "country"], as_index=False)
+           .agg(fob_usd=("metricFOB", "sum"), kg=("metricKG", "sum"),
+                frete_usd=("metricFreight", "sum"), seguro_usd=("metricInsurance", "sum")))
+    g = g[(g["kg"] > 0) & g["data"].isin(cambio.index)].reset_index(drop=True)
+    if g.empty:
+        return g
+
+    g["cambio_mes"] = cambio.reindex(g["data"]).to_numpy()
+    g["frete_usd_t"] = 1000 * g["frete_usd"] / g["kg"]
+    g["cif_usd_t"] = 1000 * (g["fob_usd"] + g["frete_usd"] + g["seguro_usd"]) / g["kg"]
+    g["cif_brl_t"] = g["cif_usd_t"] * g["cambio_mes"]
+
+    res_ii = [resolver_ii(r.ncm, r.data) for r in g.itertuples()]
+    res_afrmm = [resolver_afrmm(r.data) for r in g.itertuples()]
+    res_ad = [resolver_antidumping(r.country, r.data, exporter=exporter) for r in g.itertuples()]
+    g["aliquota_ii"] = [r.aliquota for r in res_ii]
+    g["aliquota_afrmm"] = [r.aliquota for r in res_afrmm]
+    g["antidumping_usd_t"] = [r.effective_value for r in res_ad]
+    g["status"] = [status_efetivo(a.status, b.status, c.status)
+                   for a, b, c in zip(res_ii, res_afrmm, res_ad)]
+
+    conhecido = g["status"] != STATUS_UNKNOWN
+    g["ppi_brl_t"] = np.nan
+    g.loc[conhecido, "ppi_brl_t"] = _ppi_brl_t(
+        g.loc[conhecido, "cif_brl_t"], g.loc[conhecido, "aliquota_ii"],
+        g.loc[conhecido, "frete_usd_t"], g.loc[conhecido, "cambio_mes"],
+        g.loc[conhecido, "aliquota_afrmm"], g.loc[conhecido, "antidumping_usd_t"], p)
+    return g
+
+
+def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
+                                       df_bruto: pd.DataFrame | None = None,
+                                       domestico_df: pd.DataFrame | None = None,
+                                       p: Optional[ParamsIPIA] = None,
+                                       exporter: Optional[str] = None) -> pd.DataFrame:
+    """IPIA-HRC V2 bottom-up multi-NCM (Stage E7, ADR 0009): agrega os 13
+    NCMs de NCM_BOBINA_QUENTE por (mes, ncm, pais) - II por NCM, AFRMM por
+    mes, antidumping por pais, todos resolvidos ANTES de agregar - e so
+    entao pondera o PPI resultante por KG. Nao substitui `calcular_ipia_mensal`
+    (legado) nem `calcular_ipia_hrc_v2` (NCM unico) - os tres coexistem;
+    nenhum e alterado por este batch. Como os demais caminhos V2, NAO e
+    conectado a --selftest/CLI/relatorio.
+
+    Duas politicas de publicacao (decisao Level 3 aprovada, ADR 0009):
+      - PUBLICATION_GRADE (>= 2022-04-01): so calcula se
+        known_policy_kg == total_kg do mes (tolerancia
+        TOL_COBERTURA_PUBLICATION_GRADE) - QUALQUER kg observado com
+        politica desconhecida (ex.: cota GECEX 929/2026 com consumo nao
+        rastreado) torna o mes inteiro UNKNOWN, SEM redistribuir peso.
+      - EXPERIMENTAL (2012-01-01 a 2022-03-31): calculavel so se
+        coverage >= LIMIAR_COBERTURA_EXPERIMENTAL (60%) E o range de
+        incerteza do II nao confirmado (aplicando a faixa documentada
+        FAIXA_II_NAO_CONFIRMADO_HISTORICO so a PARTE desconhecida do
+        volume) for <= LIMIAR_INCERTEZA_EXPERIMENTAL_PCT (2%). Quando
+        calculavel, o ponto estimado usa SO os grupos conhecidos, com
+        peso redistribuido proporcionalmente entre eles - a faixa
+        10%-14% nunca vira o valor do ponto central.
+
+    Datas fora de 2012-01-01 em diante ja voltam UNKNOWN diretamente de
+    `resolver_ii` (sem entrada nas tabelas de trade_policy) - nao ha ramo
+    especial de "fora de escopo" aqui.
+
+    Saida (uma linha por mes calculavel, `reference_period` = inicio do
+    mes): reference_period, preco_domestico_rs_t, ppi_rs_t, ipia,
+    publication_status, total_kg, known_policy_kg, unknown_policy_kg,
+    policy_coverage, ppi_lower, ppi_upper, ppi_uncertainty_range_pct.
+    Meses UNKNOWN mantem ppi_rs_t/ipia como NaN - nunca zero, nunca a
+    aliquota atual como substituto. `preco_domestico_rs_t` continua
+    publicado mesmo em meses UNKNOWN (nao depende do lado de importacao).
+    """
+    if p is None:
+        p = ParamsIPIA()
+    df = df_bruto if df_bruto is not None else _comex_bobina_bruto(ano_ini, ano_fim)
+    if df.empty:
+        return df
+    datas = pd.to_datetime(df["year"].astype(str) + "-"
+                            + df["monthNumber"].astype(str).str.zfill(2) + "-01")
+    idx_mensal = pd.date_range(datas.min(), datas.max(), freq="MS")
+    cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}").reindex(idx_mensal, method="ffill")
+
+    grupos = custo_importacao_bottom_up_mensal(df, cambio, p=p, exporter=exporter)
+    if grupos.empty:
+        return grupos
+
+    linhas = []
+    for data, g in grupos.groupby("data"):
+        total_kg = g["kg"].sum()
+        known_kg = g.loc[g["status"] != STATUS_UNKNOWN, "kg"].sum()
+        unknown_kg = total_kg - known_kg
+        coverage = known_kg / total_kg
+
+        linha = {"data": data, "total_kg": total_kg, "known_policy_kg": known_kg,
+                 "unknown_policy_kg": unknown_kg, "policy_coverage": coverage,
+                 "ppi_lower": np.nan, "ppi_upper": np.nan, "ppi_uncertainty_range_pct": np.nan,
+                 "ppi_rs_t": np.nan, "publication_status": STATUS_UNKNOWN}
+
+        if data >= PUBLICATION_GRADE_INICIO:
+            if total_kg - known_kg <= TOL_COBERTURA_PUBLICATION_GRADE * total_kg:
+                ppi = float(np.average(g["ppi_brl_t"], weights=g["kg"]))
+                linha.update(ppi_rs_t=ppi, ppi_lower=ppi, ppi_upper=ppi,
+                             ppi_uncertainty_range_pct=0.0, publication_status=STATUS_PUBLICATION_GRADE)
+            # senao: fica UNKNOWN/NaN acima - nunca redistribui peso no regime publication-grade
+        elif coverage >= LIMIAR_COBERTURA_EXPERIMENTAL:
+            conhecidos = g[g["status"] != STATUS_UNKNOWN]
+            ponto_estimado = float(np.average(conhecidos["ppi_brl_t"], weights=conhecidos["kg"]))
+            if unknown_kg > 0:
+                desconhecidos = g[g["status"] == STATUS_UNKNOWN]
+                lo, up = FAIXA_II_NAO_CONFIRMADO_HISTORICO
+                ppi_lower_desc = _ppi_brl_t(desconhecidos["cif_brl_t"], lo, desconhecidos["frete_usd_t"],
+                                             desconhecidos["cambio_mes"], desconhecidos["aliquota_afrmm"],
+                                             desconhecidos["antidumping_usd_t"], p)
+                ppi_upper_desc = _ppi_brl_t(desconhecidos["cif_brl_t"], up, desconhecidos["frete_usd_t"],
+                                             desconhecidos["cambio_mes"], desconhecidos["aliquota_afrmm"],
+                                             desconhecidos["antidumping_usd_t"], p)
+                soma_conhecido = (conhecidos["ppi_brl_t"] * conhecidos["kg"]).sum()
+                ppi_lower = (soma_conhecido + (ppi_lower_desc * desconhecidos["kg"]).sum()) / total_kg
+                ppi_upper = (soma_conhecido + (ppi_upper_desc * desconhecidos["kg"]).sum()) / total_kg
+                range_pct = (ppi_upper - ppi_lower) / ppi_lower if ppi_lower else np.nan
+            else:
+                ppi_lower = ppi_upper = ponto_estimado
+                range_pct = 0.0
+
+            linha.update(ppi_lower=ppi_lower, ppi_upper=ppi_upper, ppi_uncertainty_range_pct=range_pct)
+            if range_pct <= LIMIAR_INCERTEZA_EXPERIMENTAL_PCT:
+                linha.update(ppi_rs_t=ponto_estimado, publication_status=STATUS_EXPERIMENTAL)
+            # senao: fica UNKNOWN/NaN acima (ppi_lower/upper/range_pct ficam preservados p/ auditoria)
+        # coverage < LIMIAR_COBERTURA_EXPERIMENTAL: fica UNKNOWN/NaN acima
+
+        linhas.append(linha)
+
+    mensal = pd.DataFrame(linhas).set_index("data").sort_index()
+
+    if domestico_df is not None:
+        domestico = domestico_df
+    else:
+        trimestral = carregar_preco_domestico_trimestral()
+        blend = preco_domestico_ponderado(trimestral)
+        ipp = ibge_sidra_ipp_metalurgia()
+        domestico = encadear_preco_domestico_mensal(blend, ipp)
+
+    idx = mensal.index.intersection(domestico.index)
+    out = mensal.loc[idx].copy()
+    out["preco_domestico_rs_t"] = domestico.loc[idx, "preco_rs_t"]
+    out["ipia"] = ipia(out["preco_domestico_rs_t"], out["ppi_rs_t"])
+    out.index.name = "reference_period"  # Index.intersection() descarta o nome
+        # do indice quando o outro lado (domestico_df) nao tem indice nomeado -
+        # sem isso, reset_index() abaixo criaria uma coluna "index", nao
+        # "reference_period".
+    out = out.reset_index()
+    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia", "publication_status",
+            "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
+            "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct"]
+    return out[cols]
 
 
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,

@@ -134,7 +134,11 @@ def test_antidumping_investigacao_2025_sem_direito_provisorio_e_zero():
 
 
 def test_antidumping_residual_quando_exportador_nao_informado():
-    r = resolver_antidumping("Russia", pd.Timestamp("2019-01-01"))
+    # "Russia" em ingles (sem acento) nunca daria match aqui - o campo
+    # `country` real do Comex Stat vem em portugues, "Rússia" com acento.
+    # Fix em trade_policy.py (Stage E7): _MEDIDAS_ANTIDUMPING passou a usar
+    # "Rússia" para bater com o dado real (confirmado ao vivo na API).
+    r = resolver_antidumping("Rússia", pd.Timestamp("2019-01-01"))
     assert r.nominal_value == pytest.approx(207.43)
     assert r.effective_value == 0.0
 

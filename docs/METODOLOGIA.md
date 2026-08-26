@@ -504,6 +504,40 @@ II individual de 9 dos 13 NCMs da cesta não está comprovada nesse intervalo
 (apenas uma faixa de 10%–14% é conhecida). Ver `docs/adr/0009-*` e
 `docs/research/hrc_import_policy_history.md` para a evidência completa.
 
+### 9.5.2 Agregação bottom-up multi-NCM e publication policy (ADR 0009)
+
+Decisão Level 3 aprovada para resolver a limitação de representatividade
+entre NCMs (adendo Stage E6 do ADR 0009): a agregação dos 13 NCMs de
+`NCM_BOBINA_QUENTE` é **bottom-up**, por `(mês, NCM, país)` — II resolvido
+por NCM, AFRMM por mês, antidumping por país, **todos aplicados antes de
+qualquer soma** — e só então o PPI resultante é ponderado pelo volume
+(KG) efetivamente importado em cada grupo. Nunca: NCM representativo único,
+média simples de alíquotas entre NCMs, alíquota única sobre um CIF já
+combinado, ou cesta fixa tipo Laspeyres.
+
+Duas políticas de publicação, nunca misturadas na mesma série oficial:
+
+- **PUBLICATION_GRADE** (`>= 2022-04-01`): só calcula o mês se
+  `known_policy_kg == total_kg` (dentro de tolerância numérica). Qualquer
+  volume observado com política desconhecida (ex.: cota GECEX 929/2026
+  com consumo não rastreado) torna o mês inteiro `UNKNOWN`
+  (PPI/IPIA = NaN), **sem redistribuir peso** entre os grupos conhecidos.
+- **EXPERIMENTAL** (`2012-01-01` a `2022-03-31`): calculável somente se
+  `coverage >= 60%` **e** o range de incerteza do II não confirmado —
+  aplicando a faixa documentada 10%–14% (nunca 12% como ponto certo) só à
+  parcela desconhecida do volume — for `<= 2%`. Quando calculável, o ponto
+  estimado usa somente os grupos conhecidos, com peso redistribuído
+  proporcionalmente entre eles; a faixa 10%–14% nunca vira o valor do
+  ponto central, só o teste de elegibilidade.
+
+Implementado em `agregar_ipia_hrc_multi_ncm_mensal()`/
+`custo_importacao_bottom_up_mensal()` (`src/indices_setoriais.py`). Não
+conectado a `--selftest`/CLI/relatório nesta stage — mesmo status de
+"peça de cálculo interna, testada" que `calcular_ipia_hrc_v2()`. Evidência
+quantitativa (distribuição de coverage, sensibilidade econômica do II
+desconhecido, teste de limiares candidatos) em
+`docs/research/hrc_import_policy_history.md`.
+
 ---
 
 # 10. NCMs do IPIA
@@ -1013,7 +1047,16 @@ Princípios:
 - histórico doméstico ainda é curto;
 - NCMs ainda precisam de validação histórica;
 - parâmetros de internação (II/TEC, AFRMM, antidumping) têm modelo histórico mínimo versionado (`steel_indicator/parameters/trade_policy.py`, ADR 0009), mas II individual de 9 dos 13 NCMs permanece não comprovado para 2012-01–2022-03 (janela `historical experimental`, não publication-grade — ver ADR 0009);
-- `calcular_ipia_hrc_v2()` (`src/indices_setoriais.py`) já usa esse modelo histórico para o custo de importação, mas aplica a alíquota de **um único NCM informado pelo chamador** ao CIF já agregado dos 13 NCMs (mesma agregação de `serie_mensal_preco_bobina`) — sem ponderação por volume. No regime 2022-04+ isso é uma boa aproximação (12 dos 13 NCMs convergem para 10,8%); no período `historical experimental` (2012–2022-03) não é, porque a alíquota real dos 9 NCMs não confirmados fica numa faixa de 10%–14% (não só 10–12%), e uma diferença de ~4pp de II já desloca o IPIA calculado em ~3,5-4% (ADR 0009). Por isso `calcular_ipia_hrc_v2()` **não está conectado a `--selftest`/CLI/relatório** — uma agregação ponderada por NCM/volume é decisão metodológica própria (Level 3), ainda não tomada;
+- `calcular_ipia_hrc_v2()` (`src/indices_setoriais.py`) já usa esse modelo histórico para o custo de importação, mas aplica a alíquota de **um único NCM informado pelo chamador** ao CIF já agregado dos 13 NCMs (mesma agregação de `serie_mensal_preco_bobina`) — sem ponderação por volume. Permanece assim, deliberadamente, como registro do que **não** fazer — não foi alterado por este batch;
+- a limitação de representatividade acima **foi resolvida** por
+  `agregar_ipia_hrc_multi_ncm_mensal()`/`custo_importacao_bottom_up_mensal()`
+  (Stage E7, decisão Level 3 aprovada — ver §9.5.2 e ADR 0009): agregação
+  bottom-up por `(mês, NCM, país)`, ponderada por KG, com publication
+  policy própria (`PUBLICATION_GRADE` exige 100% do volume com política
+  conhecida; `EXPERIMENTAL` exige coverage≥60% e range de incerteza≤2%).
+  Também **não está conectado a `--selftest`/CLI/relatório** nesta stage —
+  permanece peça de cálculo interna/testada até uma decisão explícita de
+  publicação;
 - disponibilidade histórica de frete/seguro precisa ser confirmada;
 - Aço Brasil estruturado ainda precisa ser validado.
 

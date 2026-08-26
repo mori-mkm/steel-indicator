@@ -119,11 +119,11 @@ um único NCM confirmado (12% ou 10%) para representar a cesta inteira nesse
 período não tem o mesmo grau de aproximação que a constante legada tinha
 no regime atual.
 
-**Decisão de escopo**: não inventar uma agregação ponderada por NCM/volume
-agora (isso seria uma decisão metodológica nova, Level 3, sem base em
-`docs/METODOLOGIA.md`). Em vez disso: (a) `calcular_ipia_hrc_v2()` valida
-que o `ncm` informado pertence a `NCM_BOBINA_QUENTE`, mas não decide qual
-NCM é "representativo"; (b) a função permanece deliberadamente **não
+**Decisão de escopo (na época)**: não inventar uma agregação ponderada por
+NCM/volume agora (isso seria uma decisão metodológica nova, Level 3, sem
+base em `docs/METODOLOGIA.md`). Em vez disso: (a) `calcular_ipia_hrc_v2()`
+valida que o `ncm` informado pertence a `NCM_BOBINA_QUENTE`, mas não decide
+qual NCM é "representativo"; (b) a função permanece deliberadamente **não
 conectada** a `--selftest`/CLI/relatório - é uma peça de cálculo interna e
 testada, não um caminho de publicação; (c) conectar `calcular_ipia_hrc_v2`
 a qualquer saída publicada exige primeiro resolver esta questão de
@@ -131,3 +131,34 @@ representatividade (uma agregação ponderada formal, ou uma premissa
 explícita e documentada sobre qual NCM/subconjunto é aceito como
 representativo da cesta) - decisão Level 3 pendente, registrada aqui para
 não ser esquecida.
+
+## Adendo (Stage E7) — decisão Level 3 aprovada: agregação bottom-up multi-NCM
+
+A questão pendente do adendo Stage E6 foi resolvida por decisão Level 3
+explícita (evidência quantitativa em
+`docs/research/hrc_import_policy_history.md` e
+`scripts/research/ipia_hrc_ncm_coverage.py`): a agregação passa a ser
+**bottom-up**, por `(reference_period, NCM, país)` - II resolvido por NCM,
+AFRMM por mês, antidumping por país, todos aplicados **antes** de qualquer
+soma - e o PPI resultante é ponderado por volume (KG) efetivamente
+importado em cada grupo. Nunca: NCM representativo único, média simples
+entre NCMs, alíquota única sobre CIF já combinado, ou cesta fixa.
+
+Duas políticas de publicação (nunca misturadas na mesma série):
+
+- **PUBLICATION_GRADE** (`>= 2022-04-01`): só calcula se
+  `known_policy_kg == total_kg` do mês (tolerância numérica); qualquer
+  volume com política desconhecida (ex.: cota GECEX 929/2026 com consumo
+  não rastreado) torna o mês inteiro `UNKNOWN`, sem redistribuir peso.
+- **EXPERIMENTAL** (`2012-01-01` a `2022-03-31`): calculável só se
+  `coverage >= 60%` e o range de incerteza do II não confirmado (faixa
+  documentada 10%-14%, aplicada só à parcela desconhecida do volume) for
+  `<= 2%`. Quando calculável, o ponto estimado usa só os grupos
+  conhecidos, com peso redistribuído proporcionalmente entre eles.
+
+Implementado em `agregar_ipia_hrc_multi_ncm_mensal()`/
+`custo_importacao_bottom_up_mensal()` (`src/indices_setoriais.py`).
+`calcular_ipia_hrc_v2()` (NCM único) não foi alterado e permanece coexistindo
+como registro da simplificação anterior. O novo agregador também **não
+está conectado** a `--selftest`/CLI/relatório nesta stage - mesmo status de
+peça de cálculo interna/testada. Ver `docs/METODOLOGIA.md` §9.5.2.
