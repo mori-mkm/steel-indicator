@@ -248,4 +248,109 @@ Report:
 - methodology/version impact;
 - source validations performed;
 - unresolved blockers/risks;
-- whether the next batch is safe to start.
+- whether the next batch is safe to start;
+- autonomy level used;
+- whether escalation occurred;
+- final autonomy level, if different from initial;
+- user decisions still required, if any.
+
+## Autonomy Policy
+
+Classify every significant task as Level 1, 2 or 3 before implementation.
+
+### Classification header
+
+State briefly before starting:
+
+```
+AUTONOMY CLASSIFICATION
+Level: <1|2|3>
+Reason: <one sentence>
+Potential escalation triggers:
+- ...
+```
+
+Not an approval gate. Level 1/2: state it, begin immediately. Level 3: investigate, present the decision (format below), stop before implementation.
+
+### LEVEL 1 — AUTONOMOUS
+
+Inspect, edit, test, review, continue to the next safe substep — no approval needed.
+
+Typical work: behavior-preserving refactors; moving code without changing behavior; characterization/unit tests; deterministic bug fixes caused by the current refactor; structural extraction; documenting already-verified facts; formatting/cleanup with no behavior change.
+
+Rules: behavior and methodology unchanged; no new economic assumption; no new data source; no commit/push without explicit authorization.
+
+Loop: inspect → characterize if needed → implement → test → review → continue if safe. Don't stop between safe substeps.
+
+**Multi-batch autonomy**: run consecutive micro-batches toward the same authorized objective without asking between them.
+- test after each micro-batch; continue if passing and behavior-preserving;
+- fix only regressions caused by this work;
+- escalate to Level 2/3 the moment a concern of that level appears;
+- don't stop just to ask permission already granted;
+- don't invent extra work to keep going;
+- stop when the objective is done.
+
+### LEVEL 2 — AUTONOMOUS + REVIEW GATE
+
+Implement autonomously; result must pass a read-only review before the task is complete.
+
+Typical work: new source adapter; integration with an existing source; temporal parameter model after methodology is decided; new deterministic transformation; new data validation layer; wiring an approved contract into production; replacing legacy code with an approved equivalent.
+
+Loop: inspect → characterize → implement → test → code-reviewer → fix only local behavior-preserving issues → test again → stop with report.
+
+Reviewer checks: accidental methodology change, behavior regression, premature abstraction, source/domain boundary violations, unintended network/I/O, compatibility, missing tests, import cycles.
+
+**Review result**:
+- APPROVE → final verification, report, stop.
+- BLOCK, technical/local → fix, test, re-review.
+- BLOCK, methodology/product/economics/publication → escalate to Level 3, do not implement.
+
+No commit/push without explicit authorization.
+
+### LEVEL 3 — USER DECISION REQUIRED
+
+Do not choose the answer autonomously.
+
+Typical work: methodology; index weights; proxy selection; economic rules; publication criteria; product scope; treatment of economically meaningful missing data; historical comparability decisions; assumptions that change published values; choosing between competing official interpretations; judging whether uncertain evidence is publication-grade; changing an index's meaning.
+
+Process: investigate → present evidence → identify the decision → present options and consequences → recommend if useful → **STOP before implementation**. Implementation starts only after the user explicitly chooses.
+
+**Decision output format** — use when a Level 3 decision blocks implementation:
+
+```
+DECISION: <what needs to be decided>
+WHY IT MATTERS: <what behavior/result changes>
+EVIDENCE:
+- FACT:
+- DOC:
+- INFERENCE:
+- UNKNOWN:
+OPTION A: <description>
+Impact: <impact>
+OPTION B: <description>
+Impact: <impact>
+OPTION C (only if genuinely reasonable): <description>
+Impact: <impact>
+RECOMMENDATION: <option and why>
+IMPLEMENTATION BLOCKED: <what can't proceed until decided>
+```
+
+Don't invent options to fill the format. OPTION C is optional. Separate fact/doc/inference/unknown. Claude may recommend; the user decides. No implementation before the explicit choice.
+
+### Escalation, default classification, efficiency
+
+Escalate upward only, never silently downward: Level 1 finding a Level 2 concern → apply Level 2; Level 1/2 finding a Level 3 decision → stop and ask. Never convert a Level 3 decision into a technical assumption to keep working.
+
+If uncertain: behavior-only → Level 1; new implementation of already-approved behavior → Level 2; change to meaning/economics/publication → Level 3. Still uncertain → pick the higher level.
+
+Autonomy levels exist to cut unnecessary approval loops — don't ask permission for work already authorized. Stop only when the level requires it, an escalation requires it, a stop condition is hit, or the authorized scope is done. Don't keep working just to spend tokens.
+
+### Git Policy
+
+Autonomy level never authorizes Git publication.
+
+Allowed anytime: `git status`, `git diff`, `git diff --stat`, `git log`.
+
+Never without explicit authorization: `git add`, `git commit`, `git push`, merge, rebase, `reset --hard`, force push.
+
+The user creates the final checkpoint after reviewing the batch.
