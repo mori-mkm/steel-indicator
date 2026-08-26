@@ -1,348 +1,1113 @@
-# Metodologia de cálculo — IPIA
+# Steel Indicator — Metodologia Oficial dos Índices
 
-Este documento descreve **como** o motor calcula o IPIA hoje, derivado
-diretamente de `src/indices_setoriais.py` e dos ADRs em `docs/adr/`. Não
-duplica o "porquê" já registrado nos ADRs — linka para eles. Não contém
-nada de estratégia de negócio, precificação de produto ou material de
-terceiro; é só a metodologia de cálculo em si.
+## Status do documento
 
-Escopo: cobre o **IPIA** (Índice de Paridade de Importação do Aço,
-bobina laminada a quente), que é o único índice com coleta e cálculo
-ponta a ponta implementados hoje. O **ICCS** (Índice de Condições de
-Crédito Setorial) existe só como especificação de pilares/pesos/fontes
-(`ICCS` em `src/indices_setoriais.py`) — sem nenhum coletor implementado
-ainda, então não há "como calcular" real para documentar além da
-especificação em si (rodável via `--spec`).
+**Versão metodológica:** `2.0-draft`  
+**Status:** metodologia-alvo aprovada para implementação; **não publication-ready** enquanto os bloqueantes explicitamente listados neste documento permanecerem abertos.
 
-**Versão da metodologia**: `VERSAO_METODOLOGIA` (constante em
-`src/indices_setoriais.py`, hoje `"1.2"` — bump manual quando a
-metodologia de cálculo mudar, não a cada commit) é exibida no painel
-"Report Information" do relatório PDF (`--pdf-ipia`, ver
-`src/reporting/` e `docs/report_design_system.md`) como referência de
-qual versão deste documento corresponde ao número publicado.
+Este documento é a referência metodológica oficial do repositório `steel-indicator`.
 
-## 1. Fórmula do IPIA
+Ele consolida:
 
-```
-IPIA = (preço_doméstico_R$/t / custo_de_importação_posto_no_cliente_R$/t) × 100
-```
+- o comportamento econômico já validado no projeto legado;
+- os achados posteriores do guia operacional de coleta;
+- as decisões metodológicas aprovadas para a reformulação;
+- o escopo multiíndice do repositório.
 
-Implementada em `ipia(preco_domestico_rs_t, ppi_rs_t)`.
+Os arquivos em `references/` permanecem como evidência e pesquisa original. Quando houver conflito, achados posteriores **verificados em fontes reais** têm precedência sobre hipóteses anteriores.
 
-- **IPIA > 100**: preço doméstico acima da paridade de importação —
-  importar compensaria mais que comprar do produtor local.
-- **IPIA < 100**: preço doméstico abaixo da paridade — o produtor local
-  está protegido pela distância até o custo de importar.
-- **IPIA = 100**: preço doméstico exatamente igual ao custo de importação
-  posto no cliente.
+---
 
-Os dois insumos vêm de caminhos de cálculo independentes (seções 2 e 6
-abaixo) e são combinados por `calcular_ipia_mensal(ano_ini, ano_fim)`,
-que é a função central usada tanto pelo CLI `--ipia` (saída CSV) quanto
-pelo relatório `--pdf-ipia` — as duas saídas nunca divergem porque
-chamam a mesma função.
+# 1. Escopo oficial do repositório
 
-## 2. Custo de importação posto no cliente (paridade)
+O repositório implementará quatro produtos:
 
-Implementado em `custo_importacao_rs_t(preco_fob_usd_t, frete_usd_t, seguro_usd_t, cambio, p: ParamsIPIA)`.
+1. **IPIA-HRC** — Índice de Paridade de Importação do Aço para bobina laminada a quente.
+2. **IPIA-Vergalhão** — Índice de Paridade de Importação do Aço para vergalhão.
+3. **ICCS** — Índice de Condições de Crédito Setorial.
+4. **ICS** — Índice Sintético de Condições Setoriais.
 
-Entrada: FOB, frete e seguro em US$/t (do Comex Stat, ver seção 3) e
-câmbio (BCB/SGS, série `cambio_venda`, PTAX). O FOB usado é
-`preco_usd_t_publicado` — a série **já com suavização seletiva aplicada**
-(ver seção 5.2) — não o `preco_usd_t` bruto; frete e seguro não são
-suavizados, entram brutos. Ver [ADR 0005](adr/0005-suavizacao-seletiva-preco-importacao.md)
-para o porquê dessa escolha. Sequência de cálculo:
+O **IIDB está fora do escopo** deste repositório.
 
-| Etapa | Fórmula | Coluna de saída |
-|---|---|---|
-| CIF em US$/t | `FOB + frete + seguro` | `cif_usd_t` |
-| CIF em R$/t | `CIF_usd × câmbio` | `cif_brl_t` |
-| Imposto de Importação | `CIF_brl × aliquota_ii` | `ii_brl_t` |
-| AFRMM | `(frete_usd × câmbio) × afrmm` | `afrmm_brl_t` |
-| Antidumping | `antidumping_usd_t × câmbio` | `antidumping_brl_t` |
-| Base | `CIF_brl + II + AFRMM + antidumping + despesas_porto_rs_t + frete_interno_rs_t` | — |
-| Total (paridade) | `Base × (1 + margem_importador)` | `ppi_brl_t` |
+A arquitetura é comum aos quatro produtos, mas a implementação é incremental:
 
-Todos os parâmetros de internação vêm da dataclass `ParamsIPIA` — o
-único bloco explicitamente marcado no código como subjetivo/calibrável,
-com os defaults atuais:
+1. infraestrutura compartilhada;
+2. IPIA-HRC;
+3. IPIA-Vergalhão;
+4. ICCS;
+5. ICS.
 
-| Parâmetro | Default | Significado |
-|---|---|---|
-| `aliquota_ii` | 0.108 | Imposto de Importação da NCM (TEC) |
-| `afrmm` | 0.08 | Adicional de Frete para Renovação da Marinha Mercante, 8% sobre o frete marítimo |
-| `despesas_porto_rs_t` | R$ 210,00/t | Capatazia, armazenagem, despacho |
-| `frete_interno_rs_t` | R$ 140,00/t | Porto → cliente |
-| `margem_importador` | 0.03 | Margem da trading/importador |
-| `antidumping_usd_t` | 0.0 | Direito específico em US$/t. Zerado por padrão — status para bobina a quente da China não confirmado como definitivo na última checagem (ver seção 8). |
+O objetivo é evitar pipelines isolados por índice.
 
-O índice **não modela ICMS de importação** — ver seção 8 (limitações) para a razão econômica dessa decisão (removido o campo `icms_credito`, que existia sem nenhum efeito no cálculo; ver [ADR 0006](adr/0006-remocao-icms-credito-campo-morto.md)).
+---
 
-## 3. NCMs de bobina a quente (`NCM_BOBINA_QUENTE`)
+# 2. Princípio central de migração
 
-13 códigos NCM de 8 dígitos, agrupados em três categorias:
+O sistema atual é **base a ser evoluída**, não descartada.
 
-- `com_relevo`: `72081000`
-- `decapada`: `72082500`, `72082610`, `72082690`, `72082710`, `72082790`
-- `nao_decapada`: `72083610`, `72083690`, `72083700`, `72083810`, `72083890`, `72083910`, `72083990`
+## 2.1 O que é preservado como baseline
 
-Escopo: bobina laminada a quente **não ligada**, largura **≥ 600mm**,
-filtrando só as posições "em rolos". Fonte da delimitação: Circular
-SECEX 39/2025 (abertura da investigação antidumping de laminados a
-quente da China). Ficaram **fora** do escopo original da circular (e
-portanto fora de `NCM_BOBINA_QUENTE`):
+Devem ser preservados durante a migração:
 
-- `7208.40/53/54/90` — chapa, não enrolado (produto diferente de bobina).
-- `7211.xx` — largura < 600mm.
-- `7225`/`7226` — aço ligado (liga diferente).
+- fórmulas econômicas já implementadas, como baseline de comparação;
+- coletores existentes, até serem separados em módulos;
+- NCMs já pesquisadas, até validação histórica contra o catálogo e fontes oficiais;
+- dados curados das siderúrgicas;
+- lógica de preço doméstico, até evolução metodológica explícita;
+- taxonomia `OBSERVADO / CALCULADO / ESTIMADO / PROXY`;
+- `reference_period`;
+- tratamento de baixa liquidez, até decisão metodológica nova;
+- reporting existente;
+- ADRs;
+- autotestes/golden tests;
+- compatibilidade externa da CLI durante a migração.
 
-O comentário no código marca explicitamente: "confirme no Siscomex antes
-do primeiro cálculo" — a lista não teve confirmação adicional além da
-leitura da circular.
+A estrutura monolítica do código **não precisa ser preservada**.
 
-## 4. Peso de confiabilidade por volume (não por número de registros)
+## 2.2 Legacy behavior is evidence, not authority
 
-`VOLUME_MINIMO_T = 5000.0` (toneladas/mês). Em
-`serie_mensal_preco_bobina`, cada mês recebe:
+Os testes de characterization e o `--selftest` registram o comportamento legado.
 
-```
-peso_confiabilidade = min(toneladas_do_mes / VOLUME_MINIMO_T, 1.0)
+Quando esta metodologia nova divergir deliberadamente do comportamento antigo:
+
+1. a divergência deve ser explícita;
+2. deve existir uma spec/ADR quando necessário;
+3. novos testes devem validar a metodologia nova;
+4. a série legacy deve ser mantida temporariamente para comparação quando isso ajudar no diagnóstico;
+5. o resultado novo não deve ser forçado a reproduzir o antigo.
+
+---
+
+# 3. Princípios comuns aos índices
+
+## 3.1 Reprodutibilidade
+
+Todo número publicado deve poder ser reconstruído a partir de:
+
+- versão da metodologia;
+- código utilizado;
+- dados de entrada;
+- parâmetros vigentes no período;
+- data de coleta;
+- `reference_period`;
+- provenance;
+- vintage;
+- regras de transformação.
+
+## 3.2 Janela de referência congelada
+
+Quando um índice composto usar padronização por z-score, a janela de referência deve ser fixa.
+
+A referência inicial continua:
+
+```text
+2013-01 a 2019-12
 ```
 
-caindo linearmente a partir de 1.0 abaixo do limiar, chegando a 0 para
-volumes muito pequenos. **Não** usa `n_registros` (quantidade de
-combinações NCM×país no mês) como critério.
+Para uma variável \(x_{i,t}\):
 
-Racional (comentário no código, seção `VOLUME_MINIMO_T`): um mês com
-poucos parceiros comerciais mas volume grande é sinal de preço real —
-ex. set/2021, pico de um supercycle: 27 mil t em só 6 registros, porque
-o mercado global estava concentrado na escassez. Um mês com volume
-pequeno (ex. jun/2020: 55 t em 3 registros) é ruído de fato. Usar
-`n_registros` penalizaria exatamente os meses de maior conteúdo
-informativo do índice. Testado em `--selftest` (seção 8c): dois meses
-com o mesmo `n_registros` mas volumes muito diferentes recebem pesos
-diferentes. Esse mesmo peso também decide quais meses são suavizados
-(seção 5.2 abaixo) — um pico de supercycle de peso pleno nunca é
-suavizado, mesmo com poucos registros.
+\[
+z_{i,t} =
+\frac{x_{i,t} - \mu_i^{ref}}
+{\sigma_i^{ref}}
+\]
 
-## 5. Tratamento de meses faltantes e de baixo volume
+com truncamento:
 
-Três tratamentos distintos, cada um resolvendo um problema diferente,
-nunca aplicados ao mesmo dado:
+\[
+z_{i,t} \in [-3, +3]
+\]
 
-### 5.1 Lado da importação — interpolação linear de meses faltantes (`serie_mensal_preco_bobina`)
-Quando um mês não tem nenhum registro no Comex Stat, `preco_usd_t`,
-`frete_usd_t`, `seguro_usd_t` e `toneladas` são preenchidos por
-interpolação linear entre os meses vizinhos (`pandas.interpolate(method="linear")`).
-Marcado explicitamente na coluna `interpolado` (booleana), e
-`peso_confiabilidade` é forçado a `0.0` nesses meses — um mês
-interpolado nunca é tratado como dado real, mesmo que o volume
-interpolado por acaso caia acima do limiar. Documentado no código como
-"provisório — o ideal é investigar por que o mês ficou sem dado antes de
-publicar de verdade".
+A chegada de novos meses não pode reescrever o passado.
 
-### 5.2 Lado da importação — suavização seletiva de meses de baixo volume (`suavizar_preco_importacao`)
-Diferente da interpolação (que preenche meses **sem nenhum dado**), a
-suavização seletiva reduz o ruído de meses que **têm** dado mas com
-volume abaixo do mínimo (`peso_confiabilidade < 1.0`, ver seção 4):
+Se uma série não possuir histórico suficiente nessa janela, o tratamento deve ser documentado antes de publicação.
 
-```
-preco_usd_t_publicado = media_movel_centrada_3_meses(preco_usd_t)   se peso_confiabilidade < 1.0
-preco_usd_t_publicado = preco_usd_t                                 se peso_confiabilidade == 1.0 (nunca suaviza)
+## 3.3 Escala de índices sintéticos
+
+Para ICCS e ICS, quando aplicável:
+
+\[
+Indice_t = 50 + 10 \times z_t^{composto}
+\]
+
+truncado em:
+
+```text
+[0, 100]
 ```
 
-`rolling(window=3, center=True, min_periods=1)` sobre `preco_usd_t`. O
-bruto (`preco_usd_t`) **nunca é sobrescrito** — fica sempre disponível
-para auditoria — e a coluna booleana `suavizado` marca em quais meses o
-publicado difere do bruto. Frete e seguro não são suavizados (só o
-preço). É `preco_usd_t_publicado`, não o bruto, que alimenta
-`custo_importacao_rs_t` dentro de `calcular_ipia_mensal` — ver
-[ADR 0005](adr/0005-suavizacao-seletiva-preco-importacao.md) para essa
-escolha e o porquê de não deixar as duas colunas coexistindo sem uma
-sendo efetivamente usada no cálculo publicado. Testado em `--selftest`
-(seção 8d): um mês de peso pleno (mesmo com poucos registros) mantém o
-publicado idêntico ao bruto; um mês de peso reduzido recebe a média
-móvel.
+Interpretação:
 
-### 5.3 Lado doméstico — encadeamento via IPP, com hold-flat como fallback (`encadear_preco_domestico_mensal`)
-Diferente da importação, aqui **não se usa interpolação linear** — o
-motivo é look-ahead bias, explicado em detalhe no
-[ADR 0002](adr/0002-encadeamento-trimestre-mes-via-ipp.md). Resumo
-técnico do método:
+- 50 = média da janela de referência;
+- acima de 50 = condição melhor que a média histórica;
+- abaixo de 50 = condição pior que a média histórica.
 
-1. Dentro do próprio trimestre já confirmado (release trimestral
-   carregado), o nível é usado direto → `metodo="nivel_trimestral"`.
-2. Depois do trimestre confirmado mais recente, até o próximo release
-   sair, o nível é projetado mês a mês pela variação do IPP do IBGE
-   (CNAE 24 – Metalurgia, tabela SIDRA 6903):
-   ```
-   preco(mes M) = nivel_trimestral_confirmado × (IPP[M] / IPP[último mês do trimestre confirmado])
-   ```
-   → `metodo="encadeado_ipp"`.
-3. Se o IPP do mês `M` específico ainda não foi divulgado, repete o
-   último nível calculado → `metodo="hold_flat_fallback"` (nunca vira
-   `NaN`, nunca extrapola).
+Essa regra **não se aplica ao IPIA**, cuja escala econômica é centrada em 100.
 
-Cada mês da série de saída carrega o `metodo` usado, nunca escondido.
+## 3.4 Pesos
 
-**Quando cada um se aplica, resumido**: interpolação linear é sempre
-lado-importação e só para buracos pontuais (mês sem nenhum registro)
-dentro de uma série mensal já disponível via API; suavização seletiva
-também é lado-importação, mas para meses que **têm** dado, só reduz o
-ruído de volume fino; encadeamento IPP/hold-flat é sempre lado-doméstico
-e serve para *expandir* um nível trimestral (a granularidade real da
-fonte) em pontos mensais, nunca para preencher buracos dentro do próprio
-CSV curado.
+Pesos metodológicos devem ser:
 
-## 6. Âncora de preço doméstico
+- teóricos;
+- documentados;
+- fixos entre revisões formais.
 
-Pipeline, em ordem:
+PCA é ferramenta de validação, não de definição de pesos.
 
-1. `carregar_preco_domestico_trimestral()` lê `data/curated/preco_domestico_aco.csv`
-   (curado manualmente, versionado no Git — ver
-   [ADR 0003](adr/0003-dado-especifico-vs-proxy-e-versionamento-data-curated.md)).
-   Calcula `preco_rs_t = receita_liquida_segmento_rs / volume_vendas_t`
-   quando a coluna não vem pronta da fonte (é o caso da Usiminas; a CSN
-   já publica "Preço Médio" explícito).
-2. `preco_domestico_ponderado(df)` agrega por trimestre, empresa a
-   empresa, com **média ponderada pelo volume de vendas de aço no
-   trimestre** — não simples. Ver
-   [ADR 0001](adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md)
-   para o porquê de Usiminas+CSN ponderadas (vs. só uma das duas, vs.
-   média simples). **Nota de escopo**: o ADR 0001 avalia como
-   alternativas "só Usiminas", "só CSN" e "média simples" — a inclusão
-   ou não de outras produtoras (ex. Gerdau) **não consta como
-   alternativa avaliada** nessa decisão; se isso for relevante para o
-   índice de bobina a quente especificamente, é uma extensão de escopo
-   ainda em aberto, não decidida até aqui.
-3. `encadear_preco_domestico_mensal(trimestral, ipp_mensal)` expande o
-   trimestral em mensal (ver seção 5.2 acima e ADR 0002).
+## 3.5 Cobertura e dados faltantes
 
-### `tipo_dado_domestico`: proxy vs. específico
-Toda linha (empresa/trimestre) carrega um `tipo`:
+Quando uma variável estiver ausente:
 
-- `"especifico_laminado_quente"`: dado específico de bobina a quente
-  (hoje, **nenhuma linha carregada tem esse tipo** — ver seção 8).
-- `"proxy_segmento_aco"`: agregado do segmento "Siderurgia"/"Aço" inteiro
-  da empresa (chapas grossas + laminados a quente + laminados a frio +
-  revestidos), usado como proxy. **É o tipo de todo dado carregado hoje.**
-- `"misto"`: um trimestre agregado (`preco_domestico_ponderado`) onde as
-  empresas que compõem o blend têm tipos diferentes entre si — o motor
-  nunca finge que o blend inteiro é específico se só uma parte é. Regra
-  implementada e testada em `--selftest` (seção 12).
+- redistribuir o peso proporcionalmente dentro da estrutura definida;
+- publicar a cobertura;
+- não inventar o dado faltante;
+- abaixo de 60% de cobertura, o índice não deve ser publicado naquele período, salvo decisão metodológica explícita específica ao índice.
 
-Ver [ADR 0003](adr/0003-dado-especifico-vs-proxy-e-versionamento-data-curated.md)
-para a investigação completa de por que a granularidade real disponível
-hoje é "segmento", não "produto".
+## 3.6 Ajuste sazonal
 
-## 7. Fontes de dado e particularidades
+Séries de fluxo podem receber ajuste sazonal quando houver justificativa estatística e econômica.
 
-| Fonte | Uso | Particularidade a saber |
-|---|---|---|
-| **Comex Stat** (`api-comexstat.mdic.gov.br/general`) | FOB, frete, seguro, peso por NCM/país/mês (importação) | O endpoint `/general` **exige POST** com JSON no corpo (`_post_json`). Uma chamada GET com filtro na querystring recebe **403 do WAF**, não é falta de acesso — erro já diagnosticado em sessão anterior, documentado no código para não ser re-investigado do zero. |
-| **BCB/SGS** (`api.bcb.gov.br/dados/serie/...`) | Câmbio (PTAX, série `cambio_venda`, código 1) | Série diária: a API **rejeita (406)** janela de consulta acima de 10 anos para séries diárias — por isso `calcular_ipia_mensal` amarra o início da consulta a `ano_ini` em vez de usar o default de `sgs()` (2010), que sozinho já estoura o limite a partir de 2020. Códigos SGS têm status de confirmação heterogêneo (ver tabela abaixo). |
-| **IBGE/SIDRA** (tabela 6903) | IPP mensal, CNAE 24 – Metalurgia, para encadeamento trimestre→mês | Variável 10008 (número-índice, dez/2018=100), classificação `842[46641]` = "24 METALURGIA". **Confirmada ao vivo** via `.../agregados/6903/metadados`. A tabela **5796** (que aparece em buscas antigas por "IPP CNAE") está **encerrada desde jan/2019** — não usar. |
-| **Releases trimestrais Usiminas/CSN** | Preço doméstico (âncora) | Sem API — ingestão semi-manual via CSV curado (`data/curated/`). Ver seção 6 e ADR 0003. |
-| **Instituto Aço Brasil** (`acobrasil.org.br/site/estatistica-mensal/`) | Taxa de penetração de importação (Planos vs. Longos) | Sem API — dois arquivos (PDF oficial + Excel `.xls` histórico), publicados só o mês mais recente (sem arquivo de meses passados), URL não previsível por mês (testado: adivinhar falha para alguns meses) — sempre resolvida ao vivo da página. Calcular a taxa a partir do Excel **não reproduz** o número oficial do PDF (diferença real de ~1,2 p.p. testada) — por isso a fonte é híbrida, com `tipo_dado_penetracao` marcando qual é qual. Ver [ADR 0007](adr/0007-taxa-penetracao-importacao-acobrasil.md), que também registra um padrão geral: citações de terceiros (bancos, research) sobre "penetração de importação" costumam usar fórmula própria não pública — divergência com um número de terceiro não é necessariamente erro da nossa extração; a evidência que sustenta uma fonte como confiável é consistência interna (com outras tabelas do mesmo documento), não concordância com todo número de terceiro. |
+Séries de estoque, razões e taxas não devem ser ajustadas automaticamente.
 
-### Status dos códigos SGS (`SGS` dict)
+A implementação deverá registrar:
 
-| Código | Nome | Status |
-|---|---|---|
-| 21082 | `inad_total` | **Verificado ao vivo** (bateu com valor divulgado, jun/2026) |
-| 21086 | `inad_pj_total` | **Verificado ao vivo** (idem) |
-| 21084 | `inad_livres_total` | Valor plausível, rótulo **a confirmar** |
-| 21083 | `inad_direc_total` | Valor plausível, rótulo **a confirmar** |
-| 1 | `cambio_venda` | **A confirmar** (PTAX — checar ordem de grandeza) |
-| 432 | `selic_meta` | **A confirmar** |
-| 433 | `ipca_mes` | **A confirmar** |
+- série bruta;
+- método de ajuste;
+- parâmetros;
+- série ajustada;
+- versão do procedimento.
 
-`--check-sources` imprime os últimos valores de cada série para conferência antes de publicar.
+## 3.7 Revisões e vintages
 
-## 8. Limitações conhecidas hoje
+Toda coleta persistente deve registrar no mínimo:
 
-- **Proxy de segmento, não produto específico**: o preço doméstico usado
-  hoje é sempre `tipo_dado_domestico="proxy_segmento_aco"` — o segmento
-  "Siderurgia" inteiro de Usiminas/CSN, não bobina a quente isolada.
-  Nenhuma das duas empresas publica essa quebra nos releases
-  investigados (ver ADR 0003). O IPIA calculado hoje é, formalmente, um
-  índice de paridade para o segmento de aço das duas empresas usado como
-  proxy — não um IPIA de bobina a quente puro.
-- **Cobertura histórica do dado doméstico**: 9 registros trimestrais no
-  CSV curado, dos quais **4 trimestres têm Usiminas E CSN
-  simultaneamente** (2025Q2, 2025Q3, 2025Q4, 2026Q2 — validado em
-  `--selftest`) e portanto um blend ponderado real; 2026Q1 segue só com
-  Usiminas (release da CSN para 1T26 não localizado, ver ADR 0001 para a
-  investigação completa). 2023Q1–2025Q1 (9 trimestres) e o período
-  anterior a 2023 seguem como pendência de curadoria futura.
-- **Antidumping confirmado como pendente em 23/08/2026**:
-  `antidumping_usd_t=0.0` por padrão. Checagem feita via pesquisa (não
-  suposição) nessa data: cold-rolled (Resolução Gecex 854) e revestido
-  (856) foram decididos em 12/02/2026, mas laminado a quente da China
-  **não aparece em nenhuma resolução Gecex** até a de número 947
-  (04/08/2026, última verificada). Duas datas de expectativa já passaram
-  sem decisão (fev-mar/2026 segundo imprensa, jul/2026 segundo a própria
-  Usiminas no release do 1T26). Isso **não é um fato permanente** — é o
-  status numa data específica, que precisa ser rechecado periodicamente
-  (não só confirmado uma vez) em gov.br/mdic/.../defesa-comercial antes
-  de cada publicação.
-- **Índice não modela ICMS de importação (decisão de 23/08/2026)**: o
-  campo `icms_credito` que existia em `ParamsIPIA` foi **removido** —
-  era código morto (declarado, nunca lido por `custo_importacao_rs_t`),
-  não a implementação de uma premissa deliberada. A decisão tomada agora
-  é não modelar ICMS por enquanto, pela seguinte razão econômica: o
-  público-alvo típico do IPIA (importador que revende — distribuidor,
-  trading, siderúrgica) normalmente credita o ICMS pago na importação na
-  cadeia normal do negócio, então o efeito do imposto é majoritariamente
-  de **caixa** (timing), não custo econômico líquido, para esse perfil.
-  **Isso precisa ser revisitado** se o índice precisar servir um perfil
-  de comprador que não credita (ex.: consumidor final, empresa em regime
-  que não credita) — nesse caso ICMS vira custo real e a paridade
-  calculada hoje subestima o custo de importação para esse comprador.
-  Ver [ADR 0006](adr/0006-remocao-icms-credito-campo-morto.md) para as
-  alternativas consideradas (implementar de verdade exigiria levantar a
-  alíquota de ICMS-importação por estado/regime — pendência de dado
-  ainda não investigada — e resolver o cálculo "por dentro" do imposto,
-  estruturalmente diferente das demais linhas de custo).
-- **NCMs não reconfirmados no Siscomex**: a lista em `NCM_BOBINA_QUENTE`
-  vem da leitura da Circular SECEX 39/2025; o próprio comentário no
-  código pede confirmação adicional no Siscomex antes do primeiro
-  cálculo publicado — isso não foi feito além da leitura da circular.
-- **Penetração de importação é agregado "Planos", não bobina a quente
-  específica**: mesmo padrão de granularidade do preço doméstico (ver
-  ADR 0007) — o Instituto Aço Brasil não publica essa quebra por produto
-  específico, só por categoria (Planos/Longos).
-- **Sem cross-validação da penetração de importação**: o projeto não tem
-  consumo aparente doméstico próprio (só volume de importação via Comex
-  Stat, com escopo mais estreito — 13 NCMs específicos de bobina a
-  quente, não "Planos" inteiro), então não há como montar uma taxa
-  própria comparável à do Aço Brasil para validação cruzada (ver
-  ADR 0007). Avaliado, não implementado.
-- **Meses sem PDF nem Excel do Aço Brasil disponível ficam `NaN`**: sem
-  fallback silencioso — `--pdf-ipia` mostra "não disponível" nesse caso,
-  nunca um número inventado.
+- `collected_at`;
+- `reference_period`;
+- `source_id`;
+- `n_obs`;
+- intervalo de observações;
+- status de validação;
+- hash do conteúdo;
+- versão de metodologia;
+- versão de código.
 
-## 9. Taxonomia de proveniência e vintage por variável
+Revisão de fonte deve gerar novo vintage.
 
-Ver [ADR 0008](adr/0008-taxonomia-observado-calculado-estimado-proxy-e-vintage.md)
-para a investigação e o racional completo. Resumo:
+O dado antigo não deve ser sobrescrito silenciosamente.
 
-- Todo número exibido no relatório PDF carrega um `reference_period`
-  próprio (o mês/janela real daquele dado específico) — variáveis
-  diferentes podem legitimamente ter meses de referência diferentes
-  (Comex Stat, IPP/IBGE e Aço Brasil têm defasagens distintas, ver
-  seção 7 acima), e o relatório mostra isso explicitamente em vez de um
-  "atual" genérico. Exceção: uma métrica que **combina** matematicamente
-  dois valores (ex. o spread da decomposição de custo) exige que os dois
-  lados venham do **mesmo** mês — nunca soma dois meses diferentes.
-- Todo número carrega dois eixos independentes de proveniência: `nivel`
-  (`OBSERVADO` → `CALCULADO` → `ESTIMADO`, mutuamente exclusivo — quanto
-  processamento o número sofreu) e `proxy` (booleano, ortogonal — o
-  escopo bate com o rótulo?). Implementado em
-  `indices_setoriais.classificar_ipia`/`classificar_preco_domestico`/
-  `classificar_custo_internacao`/`classificar_cambio`/
-  `classificar_penetracao`/`classificar_origem_importacao` e
-  `montar_tabela_vintage()`.
-- `taxa_penetracao_pct` via `aproximado_consumo_aparente` é `CALCULADO`
-  (não `ESTIMADO` nem `PROXY`) com `metodo="formula_alternativa"` — ver
-  ADR 0008 para o porquê dessa classificação específica.
+---
+
+# 4. Proveniência
+
+A proveniência possui dois eixos independentes.
+
+## 4.1 Nível de processamento
+
+### OBSERVADO
+Valor diretamente publicado por uma fonte primária, sem transformação econômica relevante.
+
+### CALCULADO
+Valor derivado por operação determinística sobre dados observados.
+
+Exemplos:
+
+- valor unitário = valor / peso;
+- preço médio ponderado;
+- taxa de penetração calculada.
+
+### ESTIMADO
+Valor resultante de interpolação, projeção, hold-flat, benchmarking ou outra técnica que complete informação não observada diretamente naquele período.
+
+### PROXY
+Indica incompatibilidade entre o escopo real da fonte e o rótulo conceitual desejado.
+
+`PROXY` é ortogonal a `OBSERVADO / CALCULADO / ESTIMADO`.
+
+Um valor pode ser:
+
+```text
+CALCULADO + PROXY
+ESTIMADO + PROXY
+OBSERVADO sem proxy
+```
+
+## 4.2 Reference period
+
+Cada variável deve carregar seu próprio `reference_period`.
+
+Não se deve usar um rótulo genérico como “atual” quando variáveis possuem defasagens diferentes.
+
+Quando duas variáveis são combinadas matematicamente, elas devem ser reconciliadas no mesmo período de referência.
+
+---
+
+# 5. Engenharia de fontes
+
+## 5.1 Structured-data-first
+
+Ordem de preferência para produção:
+
+1. API;
+2. CSV/XLSX;
+3. tabela estruturada oficial;
+4. PDF apenas como último recurso.
+
+Quando uma informação relevante existir apenas em PDF:
+
+```text
+PDF
+→ curadoria/validação
+→ artefato estruturado versionado
+→ pipeline
+```
+
+Evitar dependência recorrente de extração de PDF quando houver alternativa estruturada.
+
+## 5.2 Status de validação
+
+Toda fonte/identificador deve ser classificada como:
+
+### VERIFICADO
+A fonte foi executada e o resultado conferido contra evidência oficial.
+
+### DOCUMENTADO
+A fonte/identificador foi confirmado em documentação ou fonte oficial, mas não executado no ambiente atual.
+
+### A CONFIRMAR
+A evidência ainda não é suficiente.
+
+Nenhuma série deve ser promovida silenciosamente de “a confirmar” para “verificada”.
+
+---
+
+# 6. Regras específicas de coleta
+
+## 6.1 BCB SGS
+
+Nunca usar:
+
+```text
+/dados/ultimos/N
+```
+
+para ingestão ou validação.
+
+Usar consultas com janela explícita por data.
+
+O coletor deve:
+
+- reprocessar janela móvel adequada para capturar revisões;
+- validar datas retornadas;
+- validar número de observações;
+- registrar vintage;
+- validar rótulo e conceito econômico da série.
+
+## 6.2 Comex Stat
+
+A ingestão deve usar o endpoint oficial `/general` via POST estruturado.
+
+Não somar cegamente todos os códigos retornados por `/tables/ncm`.
+
+A validade da NCM deve ser resolvida por período histórico.
+
+Uma cesta pode mudar ao longo do tempo em função de:
+
+- criação/extinção de códigos;
+- desdobramentos;
+- reclassificações;
+- mudanças de TEC.
+
+## 6.3 Aço Brasil
+
+Priorizar o Excel estruturado oficial.
+
+PDF pode ser usado para:
+
+- documentação;
+- conferência;
+- validação do valor oficial;
+- fallback manual quando não houver alternativa.
+
+A fonte deve ser tratada como publicação setorial estruturada, não como scraping de PDF por padrão.
+
+---
+
+# 7. Backfill histórico
+
+Objetivo geral:
+
+> reconstruir a maior série historicamente comparável possível.
+
+Regras:
+
+- 2020–presente é o mínimo obrigatório quando viável, não o limite;
+- retroceder além de 2020 sempre que as fontes e regras forem comparáveis;
+- nunca aplicar parâmetros atuais retroativamente;
+- respeitar tarifa, AFRMM, antidumping, cota e demais regras vigentes em cada período;
+- registrar mudanças de classificação ou metodologia;
+- não preencher lacunas silenciosamente apenas para produzir uma série contínua;
+- preferir uma série mais curta e defensável a uma série longa construída sobre hipóteses frágeis.
+
+---
+
+# 8. IPIA — visão comum
+
+O IPIA mede a relação entre:
+
+- preço doméstico do produto;
+- custo econômico de importar o mesmo produto e colocá-lo no mercado brasileiro.
+
+Para cada família \(p\):
+
+\[
+IPIA_{p,t} =
+\left(
+\frac{P^{dom}_{p,t}}
+{PPI_{p,t}}
+\right)
+\times 100
+\]
+
+Interpretação:
+
+- **IPIA > 100**: preço doméstico acima da paridade;
+- **IPIA < 100**: preço doméstico abaixo da paridade;
+- **IPIA = 100**: equilíbrio entre preço doméstico e custo de importação.
+
+O mesmo motor deve atender:
+
+- HRC;
+- vergalhão.
+
+As configurações específicas ficam fora da função econômica genérica.
+
+---
+
+# 9. IPIA — lado importado
+
+## 9.1 Preço realizado de importação
+
+A fonte oficial é o Comex Stat.
+
+Para cada produto, origem, NCM e período:
+
+\[
+P^{FOB}_{t}
+=
+\frac{Valor\ FOB_t}
+{Peso\ Liquido_t}
+\]
+
+convertido para US$/t.
+
+O objetivo não é reproduzir uma cotação teórica internacional, e sim medir o preço efetivamente realizado na fronteira brasileira.
+
+## 9.2 Frete e seguro
+
+Quando disponíveis na fonte:
+
+\[
+Frete_t =
+\frac{Valor\ Frete_t}{Peso_t}
+\]
+
+\[
+Seguro_t =
+\frac{Valor\ Seguro_t}{Peso_t}
+\]
+
+Esses valores observados têm precedência sobre parâmetros fixos aproximados.
+
+A disponibilidade histórica efetiva das métricas deve ser validada por produto/NCM.
+
+## 9.3 CIF
+
+\[
+CIF_t^{US\$/t}
+=
+P_t^{FOB}
++
+Frete_t
++
+Seguro_t
+\]
+
+## 9.4 Custo de importação / PPI
+
+Forma conceitual:
+
+\[
+PPI_t =
+[
+CIF_t \times FX_t
++
+II_t
++
+AFRMM_t
++
+AD_t
++
+D_{porto,t}
++
+D_{interno,t}
+]
+\times
+(1 + margem_t)
+\]
+
+onde:
+
+- `FX_t` = câmbio de referência do período;
+- `II_t` = imposto de importação vigente;
+- `AFRMM_t` = regra vigente no período;
+- `AD_t` = antidumping específico aplicável no período;
+- `D_porto` = despesas portuárias;
+- `D_interno` = frete interno de referência;
+- `margem` = margem do importador, quando aplicável.
+
+## 9.5 Parâmetros históricos
+
+A implementação nova deve usar parâmetros **time-varying**.
+
+Não é permitido aplicar:
+
+- alíquota atual de II;
+- AFRMM atual;
+- antidumping atual;
+- cota atual;
+- majoração atual;
+
+a períodos históricos onde a regra não estava vigente.
+
+A arquitetura deve permitir tabelas de vigência com:
+
+```text
+valid_from
+valid_to
+product_family
+ncm
+parameter
+value
+source
+validation_status
+```
+
+---
+
+# 10. NCMs do IPIA
+
+## 10.1 Regra geral
+
+Cada família possui sua própria cesta.
+
+A cesta deve ser:
+
+- versionada;
+- validada contra fonte oficial;
+- historicamente consciente;
+- auditável.
+
+## 10.2 IPIA-HRC
+
+A cesta legacy de HRC é preservada como baseline de pesquisa.
+
+Antes de publicação V2:
+
+- cruzar com o catálogo;
+- validar contra NCMs vigentes;
+- mapear mudanças históricas;
+- excluir códigos extintos fora de sua vigência.
+
+## 10.3 IPIA-Vergalhão
+
+A cesta deve ser definida em spec própria.
+
+Não reutilizar automaticamente NCMs de HRC ou agregados de “longos”.
+
+A família deve ter definição de produto própria e comparabilidade econômica explícita.
+
+---
+
+# 11. Tratamento de baixa liquidez no lado importado
+
+O tratamento atual de baixa liquidez permanece como baseline até revisão metodológica específica.
+
+Princípios preservados:
+
+- volume econômico é mais informativo que quantidade de registros;
+- observações brutas não devem ser sobrescritas;
+- qualquer suavização deve produzir coluna derivada;
+- meses interpolados/suavizados devem manter provenance explícita.
+
+Antes de alterar:
+
+- limiar de volume;
+- função de peso;
+- janela de suavização;
+- método de interpolação;
+
+deve existir análise metodológica específica por produto.
+
+HRC e vergalhão podem demandar limiares diferentes.
+
+---
+
+# 12. IPIA-HRC — preço doméstico
+
+## 12.1 Regra-alvo V1
+
+A metodologia pública inicial é:
+
+```text
+âncora trimestral de nível
++
+movimento mensal por índice de preços
+```
+
+A fonte deve ser a mais granular e comparável disponível.
+
+## 12.2 Candidatas iniciais
+
+Começar investigando:
+
+- CSN;
+- Usiminas.
+
+Avaliar:
+
+- Gerdau;
+- outras produtoras;
+
+pelos mesmos critérios de qualidade.
+
+Nenhuma empresa entra obrigatoriamente apenas por ser grande ou estar citada em pesquisa anterior.
+
+## 12.3 Critério de inclusão
+
+Uma empresa pode compor a âncora quando:
+
+- receita e volume se referem ao mesmo período;
+- receita e volume cobrem o mesmo mercado;
+- o escopo do produto é suficientemente homogêneo;
+- a informação é estruturada ou curada de forma reprodutível;
+- a unidade econômica é comparável às demais empresas.
+
+## 12.4 Preço realizado
+
+Quando a informação permitir:
+
+\[
+P^{dom}_{t}
+=
+\frac{\sum_i Receita_{i,t}}
+{\sum_i Volume_{i,t}}
+\]
+
+A ponderação deve ocorrer por volume econômico, não por média simples entre empresas.
+
+## 12.5 Proxy
+
+Se receita/volume representar um segmento amplo de aço:
+
+```text
+tipo = PROXY
+```
+
+Nunca rotular como preço puro de HRC.
+
+O relatório e os datasets devem deixar explícitos:
+
+- escopo real da fonte;
+- nível de processamento;
+- se existe proxy.
+
+## 12.6 Encadeamento mensal
+
+O IPP utilizado deve ser o mais específico disponível e metodologicamente apropriado para HRC.
+
+Prioridade:
+
+1. série de preço específica ao produto, se disponível e validada;
+2. série de preço mais próxima ao produto;
+3. IPP de siderurgia/metalurgia como fallback documentado.
+
+## 12.7 Temporal benchmarking
+
+O encadeamento simples entre âncoras trimestrais é baseline, não solução definitiva.
+
+A implementação V2 deve avaliar técnicas formais de temporal benchmarking quando:
+
+- houver saltos artificiais na fronteira de trimestres;
+- a soma/média mensal não reconciliar adequadamente com as âncoras;
+- o método simples introduzir distorção visível.
+
+Qualquer técnica nova deve:
+
+- preservar as âncoras observadas;
+- não usar informação futura indevidamente;
+- ser determinística;
+- gerar provenance `ESTIMADO` nos pontos inferidos.
+
+## 12.8 Hierarquia futura de fontes
+
+Se surgir fonte de transações domésticas efetivas de HRC:
+
+```text
+transações observadas
+> fonte pública produto-específica
+> CVM + IPP
+> proxy de segmento
+```
+
+Uma fonte superior pode substituir a V1 mediante spec/ADR.
+
+---
+
+# 13. IPIA-Vergalhão — preço doméstico
+
+O motor econômico é o mesmo do HRC.
+
+A âncora doméstica deve ser específica a vergalhão.
+
+Prioridades de investigação:
+
+1. fonte pública produto-específica estruturada;
+2. SINAPI ou outra série pública homogênea, se economicamente comparável;
+3. divulgações empresariais estruturadas;
+4. proxy documentada apenas se não houver alternativa melhor.
+
+A metodologia final do preço doméstico de vergalhão deve ser congelada em spec própria antes de publicação.
+
+Não assumir que o método CVM + IPP do HRC é automaticamente correto para vergalhão.
+
+---
+
+# 14. IPIA oficial e Nowcast
+
+## 14.1 Oficial
+
+Primeira implementação:
+
+```text
+IPIA oficial mensal
+```
+
+Usa apenas componentes fechados conforme a regra de publicação.
+
+## 14.2 Nowcast
+
+Fora do escopo V1.
+
+A arquitetura deve permitir uma futura versão semanal.
+
+O Nowcast deverá:
+
+- ser série separada;
+- usar rótulo explícito;
+- informar data do último dado duro;
+- nunca sobrescrever nem ser concatenado silenciosamente à série oficial.
+
+---
+
+# 15. Bloqueantes do IPIA V2
+
+O IPIA reformulado permanece:
+
+```text
+NOT READY FOR PUBLICATION
+```
+
+até fechar os quatro bloqueantes:
+
+## 15.1 Comex POST
+
+Executar e validar o endpoint `/general` ao vivo.
+
+## 15.2 Histórico de frete/seguro/CIF
+
+Determinar desde quando as métricas estão preenchidas de forma utilizável por produto/NCM.
+
+## 15.3 NCMs vigentes por período
+
+Construir a lógica histórica que elimina códigos extintos fora de vigência.
+
+## 15.4 Excel do Aço Brasil
+
+Baixar, inspecionar, mapear e validar as abas/colunas relevantes.
+
+Esses bloqueantes devem aparecer em status operacional do projeto até encerramento.
+
+---
+
+# 16. ICCS — objetivo
+
+O ICCS mede as condições de crédito enfrentadas pelos setores tomadores.
+
+Não é:
+
+- rating;
+- nota de crédito empresarial;
+- avaliação individual de emissor.
+
+É um índice agregado de condições setoriais.
+
+---
+
+# 17. ICCS — revisão metodológica obrigatória
+
+O desenho anterior assumia disponibilidade de inadimplência em granularidade setorial fina.
+
+A pesquisa operacional posterior mostrou que:
+
+- saldo de crédito existe em granularidade setorial mais fina;
+- inadimplência/qualidade não existe na mesma granularidade;
+- SCR.data oferece qualidade em nível mais agregado de CNAE.
+
+Essa descoberta **supersede** a premissa anterior.
+
+## 17.1 Arquitetura de duas camadas
+
+Adotar:
+
+### Camada fina
+Informação específica do subsetor:
+
+- saldo de crédito;
+- atividade;
+- produção;
+- preços;
+- capacidade;
+- comércio exterior;
+- outras variáveis disponíveis em granularidade compatível.
+
+### Camada ampla
+Qualidade de crédito disponível em seção/grupo mais amplo.
+
+A limitação deve ser pública.
+
+Não fingir que a inadimplência ampla é específica do subsetor.
+
+## 17.2 Proibição de proxy inferencial
+
+Não derivar “inadimplência fina” de:
+
+- desaceleração do crédito;
+- atividade;
+- outras variáveis correlacionadas.
+
+Isso produziria inferência sobre inferência.
+
+## 17.3 Pesos
+
+O desenho antigo:
+
+```text
+Qualidade da carteira = 30%
+```
+
+está supersedido.
+
+Novo alvo:
+
+```text
+Qualidade da carteira ≈ 22%
+```
+
+O peso removido deve ser redistribuído para pilares cuja informação seja realmente fina, especialmente:
+
+- acesso/volume;
+- capacidade de pagamento.
+
+**Os pesos exatos ainda devem ser congelados em spec metodológica específica do ICCS antes de implementação final.**
+
+Até lá, não inventar valores exatos.
+
+---
+
+# 18. ICCS — pipeline conceitual
+
+```text
+coleta
+→ validação por fonte
+→ mapeamento CNAE/setor
+→ transformação
+→ padronização
+→ orientação
+→ agregação por pilar
+→ agregação final
+→ cobertura
+→ PCA/diagnóstico
+→ vintage
+→ publicação
+```
+
+A infraestrutura deve ser compartilhada com IPIA/ICS sempre que apropriado.
+
+---
+
+# 19. ICCS — critérios de aceitação
+
+Antes de publicação, o ICCS deve provar:
+
+## 19.1 Coerência interna
+PCA deve indicar estrutura conjunta razoável.
+
+Referência inicial:
+
+```text
+PC1 >= 45% da variância
+```
+
+## 19.2 Estabilidade
+A entrada de um mês novo não deve reescrever materialmente o histórico fora de revisões legítimas das fontes.
+
+## 19.3 Utilidade
+O índice deve demonstrar relação econômica útil com desfechos futuros relevantes.
+
+O teste de antecedência deve ser definido respeitando a granularidade real da inadimplência disponível.
+
+Não usar um target fino inexistente.
+
+## 19.4 Cobertura
+Cobertura abaixo do limiar definido impede publicação.
+
+---
+
+# 20. ICS — definição
+
+A primeira versão do ICS será um:
+
+> índice sintético de condições setoriais
+
+construído sobre variáveis públicas contínuas.
+
+Pode incluir:
+
+- produção;
+- utilização de capacidade;
+- comércio exterior;
+- preços;
+- emprego;
+- energia;
+- outras variáveis específicas por setor.
+
+Não deve ser chamado de índice de difusão enquanto não usar respostas de painel.
+
+---
+
+# 21. ICS — painel futuro
+
+Survey/painel é extensão posterior.
+
+O projeto deve permitir no futuro:
+
+- painel fixo;
+- cobertura por capacidade/faturamento;
+- perguntas ternárias;
+- saldo de respostas;
+- divulgação de `n`;
+- média móvel inicial;
+- separação entre medidas observadas e expectativas.
+
+Não implementar painel na primeira fase da infraestrutura comum.
+
+---
+
+# 22. Infraestrutura compartilhada
+
+Todos os índices devem consumir a mesma arquitetura de dados:
+
+```text
+SOURCE
+  ↓
+FETCH
+  ↓
+RAW VINTAGE
+  ↓
+CONTRACT VALIDATION
+  ↓
+NORMALIZATION
+  ↓
+TRANSFORMATION
+  ↓
+QUALITY VALIDATION
+  ↓
+CALCULATION INPUT
+  ↓
+INDEX ENGINE
+  ↓
+PUBLICATION VINTAGE
+```
+
+O índice específico não deve:
+
+- recolher a mesma fonte novamente;
+- reimplementar validação de API;
+- duplicar tratamento de vintage;
+- criar regra própria de provenance incompatível.
+
+---
+
+# 23. Calendário e publication readiness
+
+Um índice só pode ser considerado pronto para publicação quando:
+
+- fontes bloqueantes estiverem verificadas;
+- metodologia estiver versionada;
+- histórico estiver reproduzível;
+- critérios de aceitação estiverem satisfeitos;
+- provenance/vintage estiver funcionando;
+- calendário de divulgação estiver definido;
+- política de revisão estiver documentada;
+- limitações forem públicas.
+
+Implementação técnica concluída não significa publication-ready.
+
+---
+
+# 24. Governança de mudança metodológica
+
+Mudança metodológica deve:
+
+1. possuir motivação explícita;
+2. identificar comportamento anterior;
+3. explicar comportamento novo;
+4. registrar impacto histórico;
+5. possuir testes;
+6. atualizar versão metodológica;
+7. preservar comparação com versão anterior quando material.
+
+Mudanças estruturais sem efeito econômico não exigem bump metodológico.
+
+---
+
+# 25. Licenciamento e uso de dados
+
+O pipeline deve armazenar metadados de licença/status de uso quando relevante.
+
+Princípios:
+
+- vender o índice e a análise, não redistribuir bases quando a licença não permitir;
+- fontes com uso comercial não confirmado permanecem com status explícito;
+- fontes restritas não entram em produção sem autorização/licença;
+- não substituir dados licenciados por cópias indiretas ou scraping não autorizado.
+
+---
+
+# 26. Limitações atuais conhecidas
+
+## IPIA-HRC
+- preço doméstico ainda é majoritariamente proxy de segmento;
+- histórico doméstico ainda é curto;
+- NCMs ainda precisam de validação histórica;
+- parâmetros de internação ainda não estão historicamente versionados;
+- disponibilidade histórica de frete/seguro precisa ser confirmada;
+- Aço Brasil estruturado ainda precisa ser validado.
+
+## IPIA-Vergalhão
+- cesta NCM final não está congelada;
+- fonte doméstica homogênea ainda precisa ser escolhida e validada;
+- histórico comparável ainda precisa ser mapeado.
+
+## ICCS
+- pesos finais pós-descoberta da granularidade de inadimplência ainda precisam ser congelados;
+- mapeamento fino/amplo por setor precisa de spec explícita;
+- critérios de antecedência precisam respeitar o target realmente disponível.
+
+## ICS
+- composição setorial inicial ainda precisa de especificação própria.
+
+---
+
+# 27. Roadmap metodológico
+
+## Fase 1 — plataforma
+- contratos de fonte;
+- coleta;
+- vintages;
+- validação;
+- transformação;
+- provenance;
+- parâmetros históricos.
+
+## Fase 2 — IPIA
+- HRC;
+- vergalhão;
+- backfill;
+- comparação legacy vs nova metodologia;
+- publicação oficial mensal.
+
+## Fase 3 — ICCS
+- arquitetura de duas camadas;
+- pesos finais;
+- séries;
+- backfill;
+- critérios de aceitação.
+
+## Fase 4 — ICS
+- índice sintético;
+- setores prioritários;
+- painel apenas em etapa futura.
+
+---
+
+# 28. Relação com código legado
+
+Enquanto durar a migração:
+
+```text
+legacy
+→ comparação
+→ diagnóstico
+→ golden tests
+```
+
+e:
+
+```text
+nova metodologia
+→ specs
+→ novos módulos
+→ novos testes
+→ publication candidate
+```
+
+O código antigo pode continuar existindo temporariamente.
+
+Ele não deve impedir uma mudança metodológica explicitamente aprovada.
+
+---
+
+# 29. Critério de encerramento da reformulação
+
+A reformulação da arquitetura/metodologia estará concluída quando:
+
+- o monólito deixar de ser a fonte central de verdade;
+- fontes forem adapters independentes;
+- vintages forem persistidos;
+- provenance fizer parte dos contratos;
+- HRC e vergalhão usarem o mesmo motor;
+- parâmetros históricos forem versionados;
+- os quatro bloqueantes do IPIA estiverem fechados;
+- IPIA-HRC e IPIA-Vergalhão tiverem histórico reproduzível;
+- ICCS tiver pesos e granularidade final documentados;
+- ICS tiver spec aprovada;
+- reporting consumir somente outputs calculados, sem recolher/recalcular lógica de negócio.
+
+---
+
+# 30. Documentos relacionados
+
+Consultar:
+
+- `CLAUDE.md` — regras operacionais para desenvolvimento;
+- `docs/architecture.md` — arquitetura de software;
+- `docs/data-sources.md` — contratos e status das fontes;
+- `docs/adr/` — decisões metodológicas/arquiteturais;
+- `docs/specs/` — implementação incremental;
+- `references/catalogo_series_coleta.xlsx`;
+- `references/guia_de_coleta_de_series.md`;
+- `references/manual_metodologico_indices_setoriais.md`.
+
+Os arquivos em `references/` são evidência de pesquisa.  
+Este documento é a metodologia oficial que o código deve implementar.

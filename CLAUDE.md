@@ -1,159 +1,251 @@
 # Steel Indicator — Project Instructions
 
 ## Mission
-Build a reliable, reproducible and auditable engine for Brazilian steel-sector indicators, starting with the IPIA (Índice de Paridade de Importação do Aço).
 
-Reliability is more important than speed. A published number must be reproducible from versioned methodology, source data, parameters and vintage metadata.
+Build a reliable, reproducible and auditable multi-index platform for:
+- IPIA-HRC;
+- IPIA-Rebar;
+- ICCS;
+- ICS.
+
+IIDB is out of scope.
+
+Published numbers must be reproducible from versioned methodology, source data, historical parameters, provenance, vintage and code version.
 
 ## Source of truth
-Use this precedence when instructions conflict:
 
-1. Tests and executable contracts for current behavior.
-2. `docs/METODOLOGIA.md` for published calculation methodology.
-3. Accepted ADRs in `docs/adr/`.
-4. Accepted specs in `docs/specs/`.
-5. `docs/architecture.md` for software boundaries.
-6. `docs/data-sources.md` for source status and collection constraints.
-7. Existing implementation.
+When instructions conflict:
 
-Do not silently change methodology to make code cleaner.
+1. verified later findings from real source validation and accepted decisions;
+2. `docs/METODOLOGIA.md`;
+3. accepted ADRs in `docs/adr/`;
+4. accepted specs in `docs/specs/`;
+5. `docs/architecture.md`;
+6. `docs/data-sources.md`;
+7. original research in `references/`;
+8. characterization/golden tests as evidence of legacy behavior;
+9. existing implementation.
 
-## Default workflow
-Use the simplest execution mode that can reliably solve the task.
+**Legacy behavior is evidence, not authority.**
 
-### Trivial change
-Inspect → edit → run relevant verification.
+Golden tests preserve the old system for comparison. If accepted methodology intentionally changes legacy behavior, update/add tests explicitly instead of forcing the new implementation to reproduce the old result.
 
-### Medium change
-Inspect → short plan → edit → verify.
+Never change methodology silently to make code cleaner or tests pass.
 
-### Complex/refactoring/methodology change
-Inspect → write or update a spec → define acceptance criteria → implement in small steps → verify after each step → final review.
+## References
 
-Do not create an agent team by default.
+`references/` contains original research, not direct implementation instructions:
 
-Use a subagent only when isolated exploration, validation or review materially reduces main-context noise or improves coverage.
+- `catalogo_series_coleta.xlsx` — master series catalog; read `Leia-me` first.
+- `guia_de_coleta_de_series.md` — later operational research and verified source findings.
+- `manual_metodologico_indices_setoriais.md` — original methodological design.
 
-## Completion criteria
-Implementation is not completion.
+Distill accepted decisions into `docs/`, ADRs and specs. Do not rewrite original research merely to match code.
+
+## Workflow
+
+Trivial: Inspect → edit → verify.
+
+Medium: Inspect → short plan → edit → verify.
+
+Complex/refactor/methodology/source change:
+Inspect → classify work → write/update spec → define acceptance criteria → implement in small batches → verify each batch → review.
+
+Use subagents only when isolated exploration, validation or review materially reduces context noise or improves coverage. Do not create agent teams by default.
+
+## Classify significant work
+
+### Behavior-preserving refactor
+- characterization tests protect preserved behavior;
+- extract before rewriting;
+- keep changes small, reversible and testable;
+- do not mix methodology changes into the same batch.
+
+### Methodology correction/upgrade
+- requires accepted spec and, when appropriate, ADR;
+- state which legacy behavior changes;
+- add tests for new methodology;
+- keep legacy output available for comparison when useful;
+- bump methodology version when published behavior changes.
+
+### New capability/index
+- derive requirements from accepted methodology and source contracts;
+- reuse common infrastructure;
+- do not copy legacy IPIA assumptions into ICCS/ICS without justification.
+
+## Completion
 
 A task is complete only when:
 - requested behavior is implemented;
 - acceptance criteria are satisfied;
-- relevant automated verification actually ran;
-- real test output was inspected;
-- known regressions are resolved;
-- remaining uncertainty is explicitly reported.
+- relevant tests actually ran and output was inspected;
+- regressions are resolved;
+- source status is not overstated;
+- uncertainty and methodology impact are explicit.
 
-Never claim a command, API call, test or source validation succeeded unless it actually ran and its output was observed.
+Never claim a test, API call or source validation succeeded unless it actually ran and its output was observed.
 
-## Verification
-Current baseline command:
+## Verification baseline
 
 ```bash
+python -m pytest tests/ -v
 python src/indices_setoriais.py --selftest
 ```
 
-During the test migration, preserve this command until external characterization tests cover the same behavior.
+Run the smallest relevant pytest target first, then the full suite.
 
-When pytest exists, run the smallest relevant test first, then the broader suite when appropriate.
+Preserve `--selftest` until an accepted decision removes it. Never weaken tests to make verification pass.
 
-Network checks are integration verification, not unit tests.
-
-## Refactoring rule
-Before moving behavior out of `src/indices_setoriais.py`, create characterization coverage for that behavior.
-
-Refactor by extraction, not rewrite.
-
-Keep each step:
-- small;
-- behavior-preserving;
-- testable;
-- reversible.
-
-Do not combine architecture refactoring with methodology changes in the same step.
+Network/source checks are integration verification, not unit tests.
 
 ## Methodology invariants
-Do not change these without an explicit accepted spec/ADR and corresponding tests:
 
-- frozen reference window behavior;
-- theoretical fixed weights;
+Do not change without accepted methodology/spec decisions and tests:
+- frozen reference-window behavior where applicable;
+- fixed theoretical weights unless explicitly revised;
 - missing-data weight redistribution;
-- minimum coverage rules;
-- IPIA economic formula;
-- domestic-price anchoring/chain methodology;
-- volume-based confidence treatment;
-- interpolation/smoothing semantics;
-- data provenance taxonomy;
+- minimum publication coverage;
+- provenance taxonomy;
+- `reference_period`;
 - vintage/cutoff rules;
-- published methodology versioning.
+- methodology versioning;
+- OBSERVADO / CALCULADO / ESTIMADO / PROXY semantics.
 
-Methodology-specific rules live in `.claude/rules/methodology.md`.
+Details live in `docs/METODOLOGIA.md`.
 
-## Data integrity
+## IPIA target
+
+Support HRC and rebar through one shared engine with separate:
+- NCM baskets;
+- domestic-price references;
+- historical policy parameters;
+- quality rules;
+- provenance metadata.
+
+The current IPIA is a legacy baseline to evolve.
+
+Import side:
+- use realized Comex Stat value/weight;
+- use observed freight and insurance when available;
+- validate NCM validity by historical period;
+- never apply current tariffs, quotas, antidumping or AFRMM retroactively;
+- maximize only methodologically comparable history.
+
+Domestic side:
+- use the highest-quality public product-specific source available;
+- CVM/company disclosures + IPP are HRC V1, not a permanent hardcoded solution;
+- `receita / volume` is valid only for sufficiently homogeneous scope;
+- aggregated steel-segment values remain explicit PROXY;
+- a better observed source supersedes a proxy when accepted.
+
+Implement official monthly IPIA first. Keep any future weekly nowcast strictly separate.
+
+Do not mark the new IPIA publication-ready until:
+1. Comex Stat `/general` POST is validated live;
+2. historical freight/insurance/CIF availability is confirmed;
+3. NCMs are validated by historical period and extinct codes excluded;
+4. the structured Aço Brasil Excel source is inspected and validated.
+
+## ICCS
+
+Later verified operational findings supersede conflicting assumptions in the older manual.
+
+Use a two-layer design because fine sector credit balance exists while fine sector delinquency does not exist at the same granularity.
+
+Do not invent fine-grained delinquency from credit slowdown.
+
+The older 30% quality-pillar design is superseded; target about 22%, with the remainder redistributed toward pillars supported by finer sector data. Freeze exact weights in `docs/METODOLOGIA.md` before implementation.
+
+## ICS
+
+ICS follows IPIA and ICCS.
+
+Initial target: synthetic sector conditions index using public activity data and shared infrastructure.
+
+Survey/panel is a later extension.
+
+Do not call a continuous-variable synthetic index a diffusion index unless it actually uses respondent diffusion.
+
+## Data engineering
+
+Production ingestion preference:
+1. API;
+2. CSV/XLSX;
+3. official structured table;
+4. PDF only as last resort.
+
+If data exists only in PDF:
+PDF → curation/validation → versioned structured artifact → pipeline.
+
+A successful HTTP response does not prove identifier, label, schema or observation correctness.
+
+Never use BCB SGS `/ultimos/N` for ingestion or validation. Use deterministic date-bounded retrieval.
+
+Do not sum historical Comex NCM codes blindly. Validate code validity for each period.
+
+## Provenance and vintages
+
 Never fabricate, silently estimate or silently interpolate source data.
 
-Every non-observed value must preserve explicit provenance.
+Preserve:
+- OBSERVADO / CALCULADO / ESTIMADO;
+- PROXY;
+- `reference_period`.
 
-Source availability is not source validity.
-
-A successful HTTP response does not prove that a series, identifier, schema or observation is correct.
-
-Do not use BCB SGS `/ultimos/N` as an ingestion or validation mechanism. Use deterministic date-bounded retrieval and validate the returned dates and values.
-
-Every persistent raw collection must eventually support:
-- collection timestamp;
-- reference period;
-- source identifier;
-- observation count;
-- validation status;
-- content hash/vintage.
+Persistent raw collection must support or be designed to support collection timestamp, source ID, reference period, observation count, validation status, content hash, methodology version and code version.
 
 ## Architecture
-The current monolith is temporary.
 
-Target boundaries are documented in `docs/architecture.md`.
+Build one shared platform:
 
-Pure calculation code must not perform network or filesystem I/O.
+```text
+collect → raw vintage → validate → normalize → transform
+→ quality checks → index calculation → publication vintage
+```
 
-Reporting must consume calculated outputs and must not independently recollect or recalculate business logic.
+Shared infrastructure must serve IPIA, ICCS and ICS.
+
+Pure calculations must not perform network/filesystem I/O.
+
+Reporting consumes calculated result objects and must not recollect data or duplicate formulas.
 
 Do not introduce new `sys.path` manipulation.
 
-## Git
-You may inspect:
-- `git status`
-- `git diff`
-- `git log`
+## Backfill
 
-Do not push without explicit user authorization.
+Goal: longest methodologically comparable history possible.
 
-Do not rewrite history or execute destructive Git commands without explicit authorization.
+- 2020-present is a minimum target where feasible, not a cap;
+- preserve historical tariff/tax/policy regimes;
+- record structural breaks;
+- never fill gaps silently just to create continuity;
+- prefer a shorter defensible series over a longer synthetic one.
 
-Do not remove tests to make verification pass.
+## Git and security
 
-## Security
-Never read, edit, print or commit secrets, `.env` files or credentials.
+You may inspect `git status`, `git diff` and `git log`.
 
-Do not commit external client materials, private commercial strategy documents or the original research reports used to derive this project's technical rules.
+Do not push, rewrite history or run destructive Git commands without explicit authorization.
 
-Only distilled, project-specific technical knowledge belongs in this repository.
+Never read, print, edit or commit secrets, `.env` files or credentials.
 
 ## Durable knowledge
-Do not leave durable architectural or methodological decisions only in chat.
 
 Use:
-- `docs/specs/` before significant work;
-- `docs/adr/` for accepted trade-off decisions;
-- `docs/METODOLOGIA.md` for current published calculation methodology;
+- `docs/specs/` for significant implementation work;
+- `docs/adr/` for accepted trade-offs;
+- `docs/METODOLOGIA.md` for official methodology;
 - `docs/data-sources.md` for source contracts/status;
-- `docs/architecture.md` for software boundaries.
+- `docs/architecture.md` for software boundaries;
+- `references/` as research evidence only.
 
-## Reporting at task end
+## Task-end report
+
 Report:
 - files changed;
-- behavior changed or explicitly preserved;
-- tests/commands executed;
-- actual result;
-- architecture or methodology decisions;
-- unresolved risks or unverified assumptions.
+- behavior preserved vs intentionally changed;
+- tests/commands and actual results;
+- methodology/version impact;
+- source validations performed;
+- unresolved blockers/risks;
+- whether the next batch is safe to start.
