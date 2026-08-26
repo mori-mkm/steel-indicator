@@ -492,6 +492,18 @@ source
 validation_status
 ```
 
+### 9.5.1 Janela publication-grade do IPIA-HRC (ADR 0009)
+
+Para IPIA-HRC, a investigação de II/TEC, AFRMM e antidumping (2012–presente)
+concluiu que apenas **2022-04-01 → presente** tem todos os parâmetros de
+internação confirmados com evidência suficiente para publicação oficial.
+
+O período **2012-01-01 → 2022-03-31** permanece **historical experimental**
+— nunca concatenado silenciosamente à série oficial — porque a alíquota de
+II individual de 9 dos 13 NCMs da cesta não está comprovada nesse intervalo
+(apenas uma faixa de 10%–14% é conhecida). Ver `docs/adr/0009-*` e
+`docs/research/hrc_import_policy_history.md` para a evidência completa.
+
 ---
 
 # 10. NCMs do IPIA
@@ -1000,7 +1012,7 @@ Princípios:
 - preço doméstico ainda é majoritariamente proxy de segmento;
 - histórico doméstico ainda é curto;
 - NCMs ainda precisam de validação histórica;
-- parâmetros de internação ainda não estão historicamente versionados;
+- parâmetros de internação (II/TEC, AFRMM, antidumping) têm modelo histórico mínimo versionado (`steel_indicator/parameters/trade_policy.py`, ADR 0009), mas II individual de 9 dos 13 NCMs permanece não comprovado para 2012-01–2022-03 (janela `historical experimental`, não publication-grade — ver ADR 0009);
 - disponibilidade histórica de frete/seguro precisa ser confirmada;
 - Aço Brasil estruturado ainda precisa ser validado.
 
