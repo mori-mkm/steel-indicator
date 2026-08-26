@@ -919,6 +919,110 @@ def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
     })
 
 
+def calcular_ipia_hrc_v2(ncm: str, ano_ini: int = 2020, ano_fim: int = 2026,
+                         df_bruto: pd.DataFrame | None = None,
+                         domestico_df: pd.DataFrame | None = None,
+                         origin: str = "China", exporter: Optional[str] = None) -> pd.DataFrame:
+    """Caminho V2 EXPLICITO do IPIA-HRC (Stage E5/E6, ADR 0009): mesma fonte
+    de bobina (Comex) e de preco domestico do legado
+    (`calcular_ipia_mensal`), mas o custo de importacao vem de
+    `custo_importacao_historico_mensal()` - II/AFRMM/antidumping resolvidos
+    MES A MES via steel_indicator.parameters.trade_policy, em vez do
+    ParamsIPIA escalar fixo.
+
+    NAO substitui `calcular_ipia_mensal` - os dois coexistem. O legado
+    continua sendo o caminho usado por --selftest/CLI/relatorio ate uma
+    decisao explicita de migracao. `ParamsIPIA.aliquota_ii`,
+    `.afrmm` e `.antidumping_usd_t` nunca sao lidos aqui (mesma precedencia
+    ja documentada em `custo_importacao_historico_mensal`).
+
+    LIMITACAO CONHECIDA, NAO DECIDIDA NESTE BATCH (agregacao entre NCMs) -
+    ver docs/METODOLOGIA.md secao 26 (IPIA-HRC) e docs/adr/0009-*.md:
+    `serie_mensal_preco_bobina` ja soma FOB/frete/seguro dos 13 NCMs de
+    `NCM_BOBINA_QUENTE` num unico CIF combinado - exatamente como o legado
+    ja faz. O parametro `ncm` aqui escolhe apenas QUAL aliquota historica
+    (II/AFRMM/antidumping) e aplicada a esse CIF ja combinado, SEM nenhuma
+    ponderacao por volume nem verificacao de quanto esse codigo realmente
+    representa da cesta naquele mes. Isto NAO e equivalente, em magnitude,
+    a simplificacao que o legado ja faz: no regime 2022-04+, a constante
+    `ParamsIPIA().aliquota_ii=0.108` e uma boa aproximacao porque 12 dos 13
+    NCMs de fato convergem para 10,8% (so 72083910 diverge, para 9%) - erro
+    pequeno e conhecido. No periodo `historical experimental`
+    (2012-2022-03), os 9 NCMs nao confirmados individualmente tem alíquota
+    real desconhecida dentro de uma faixa de 10%-14% (nao so 10-12%) - ou
+    seja, escolher `ncm="72083700"` (12%) para representar a cesta inteira
+    nesse periodo carrega um erro potencial (ate a ponta superior da faixa,
+    14%) que nao tem o mesmo tipo de garantia documental que sustenta a
+    aproximacao da constante legada no regime atual (2022-04+). O ADR 0009 ja
+    quantifica que uma diferenca de ~4pp de II desloca o IPIA calculado em
+    ~3,5-4%. Uma agregacao ponderada por NCM/volume exigiria decisao
+    metodologica propria (Level 3) e NAO foi inventada aqui. Por isso,
+    `calcular_ipia_hrc_v2` NAO deve ser conectado a --selftest/CLI/relatorio
+    (nem tratado como substituto do legado) ate essa questao de
+    representatividade ser resolvida ou explicitamente aceita como premissa
+    documentada - permanece uma peca de calculo interna/testada, nao um
+    caminho de publicacao.
+
+    Preco domestico: mesma logica do legado
+    (`carregar_preco_domestico_trimestral` -> `preco_domestico_ponderado`
+    -> `encadear_preco_domestico_mensal`), sem alteracao - Domestic Price V2
+    e proxima stage. `domestico_df` aceita o resultado ja pronto de
+    `encadear_preco_domestico_mensal` (mesmo padrao de teste que `df_bruto`
+    ja usa em `calcular_ipia_mensal`) - se None, usa a fonte real (CSV
+    curado + IPP, sem rede para o CSV).
+
+    Formula do IPIA preservada, sem alteracao: IPIA = preco_domestico / ppi * 100.
+    Indice = reference_period (mes), mesma convencao das demais funcoes deste modulo.
+
+    `publication_status` reflete SOMENTE os parametros de politica comercial
+    resolvidos por trade_policy (PUBLICATION_GRADE/EXPERIMENTAL/UNKNOWN) -
+    NAO incorpora a taxonomia de proveniencia do preco domestico
+    (OBSERVADO/CALCULADO/ESTIMADO + PROXY, ja existente em
+    `classificar_preco_domestico`/`VintageInfo`) - unificar as duas
+    taxonomias e decisao fora de escopo deste batch. Meses com
+    `publication_status == UNKNOWN` tem `ppi_rs_t`/`ipia` como NaN - nunca
+    zero, nunca usando a aliquota atual como substituto.
+    """
+    ncms_hrc = sum(NCM_BOBINA_QUENTE.values(), [])
+    if ncm not in ncms_hrc:
+        raise ValueError(f"ncm {ncm!r} nao pertence a NCM_BOBINA_QUENTE: {sorted(ncms_hrc)}")
+
+    bobina = serie_mensal_preco_bobina(ano_ini, ano_fim, df_bruto=df_bruto)
+    if bobina.empty:
+        return bobina
+    bobina = bobina.set_index("data")
+    cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}").reindex(bobina.index, method="ffill")
+    custo = custo_importacao_historico_mensal(
+        bobina["preco_usd_t_publicado"], bobina["frete_usd_t"], bobina["seguro_usd_t"],
+        cambio, ncm=ncm, origin=origin, exporter=exporter)
+
+    if domestico_df is not None:
+        domestico = domestico_df
+    else:
+        trimestral = carregar_preco_domestico_trimestral()
+        blend = preco_domestico_ponderado(trimestral)
+        ipp = ibge_sidra_ipp_metalurgia()
+        domestico = encadear_preco_domestico_mensal(blend, ipp)
+
+    idx = bobina.index.intersection(domestico.index)
+    preco_dom = domestico.loc[idx, "preco_rs_t"]
+    ppi = custo.loc[idx, "ppi_brl_t"]
+    return pd.DataFrame({
+        "preco_domestico_rs_t": preco_dom,
+        "ppi_rs_t": ppi,
+        "ipia": ipia(preco_dom, ppi),
+        "publication_status": custo.loc[idx, "status"],
+        "aliquota_ii": custo.loc[idx, "aliquota_ii"],
+        "aliquota_afrmm": custo.loc[idx, "aliquota_afrmm"],
+        "antidumping_usd_t": custo.loc[idx, "antidumping_usd_t"],
+        "ii_brl_t": custo.loc[idx, "ii_brl_t"],
+        "afrmm_brl_t": custo.loc[idx, "afrmm_brl_t"],
+        "antidumping_brl_t": custo.loc[idx, "antidumping_brl_t"],
+        "tipo_dado_domestico": domestico.loc[idx, "tipo_dado"],
+        "metodo_domestico": domestico.loc[idx, "metodo"],
+    })
+
+
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
                                        df_bruto: pd.DataFrame | None = None,
                                        params: ParamsIPIA | None = None) -> pd.DataFrame:

@@ -1013,6 +1013,7 @@ Princípios:
 - histórico doméstico ainda é curto;
 - NCMs ainda precisam de validação histórica;
 - parâmetros de internação (II/TEC, AFRMM, antidumping) têm modelo histórico mínimo versionado (`steel_indicator/parameters/trade_policy.py`, ADR 0009), mas II individual de 9 dos 13 NCMs permanece não comprovado para 2012-01–2022-03 (janela `historical experimental`, não publication-grade — ver ADR 0009);
+- `calcular_ipia_hrc_v2()` (`src/indices_setoriais.py`) já usa esse modelo histórico para o custo de importação, mas aplica a alíquota de **um único NCM informado pelo chamador** ao CIF já agregado dos 13 NCMs (mesma agregação de `serie_mensal_preco_bobina`) — sem ponderação por volume. No regime 2022-04+ isso é uma boa aproximação (12 dos 13 NCMs convergem para 10,8%); no período `historical experimental` (2012–2022-03) não é, porque a alíquota real dos 9 NCMs não confirmados fica numa faixa de 10%–14% (não só 10–12%), e uma diferença de ~4pp de II já desloca o IPIA calculado em ~3,5-4% (ADR 0009). Por isso `calcular_ipia_hrc_v2()` **não está conectado a `--selftest`/CLI/relatório** — uma agregação ponderada por NCM/volume é decisão metodológica própria (Level 3), ainda não tomada;
 - disponibilidade histórica de frete/seguro precisa ser confirmada;
 - Aço Brasil estruturado ainda precisa ser validado.
 

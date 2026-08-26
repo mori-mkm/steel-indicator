@@ -99,3 +99,35 @@ nesta decisão - o wiring é um próximo batch separado.
   §24), não uma atualização silenciosa.
 - `docs/METODOLOGIA.md` foi atualizado no ponto mínimo necessário para
   refletir esta janela (ver §9.5 e §26).
+
+## Adendo (Stage E6) — limitação de representatividade entre NCMs
+
+`calcular_ipia_hrc_v2()` (Stage E6) conecta este modelo ao cálculo real de
+custo/PPI/IPIA, mas expôs uma limitação que não estava explícita quando
+este ADR foi escrito: `serie_mensal_preco_bobina()` já agrega FOB/frete/
+seguro dos 13 NCMs num único CIF combinado (comportamento herdado do
+legado), e `calcular_ipia_hrc_v2()` aplica a esse CIF combinado a alíquota
+histórica de **um único NCM informado pelo chamador**, sem ponderação por
+volume nem verificação formal de representatividade.
+
+No regime 2022-04+ isso é uma aproximação razoável (12 dos 13 NCMs
+convergem para 10,8%). No período `historical experimental` (2012–2022-03)
+não é: os 9 NCMs não confirmados individualmente têm alíquota real
+desconhecida dentro de uma faixa de 10%–14%, e uma diferença de ~4pp de II
+já desloca o IPIA calculado em ~3,5-4% (seção "Contexto" acima). Escolher
+um único NCM confirmado (12% ou 10%) para representar a cesta inteira nesse
+período não tem o mesmo grau de aproximação que a constante legada tinha
+no regime atual.
+
+**Decisão de escopo**: não inventar uma agregação ponderada por NCM/volume
+agora (isso seria uma decisão metodológica nova, Level 3, sem base em
+`docs/METODOLOGIA.md`). Em vez disso: (a) `calcular_ipia_hrc_v2()` valida
+que o `ncm` informado pertence a `NCM_BOBINA_QUENTE`, mas não decide qual
+NCM é "representativo"; (b) a função permanece deliberadamente **não
+conectada** a `--selftest`/CLI/relatório - é uma peça de cálculo interna e
+testada, não um caminho de publicação; (c) conectar `calcular_ipia_hrc_v2`
+a qualquer saída publicada exige primeiro resolver esta questão de
+representatividade (uma agregação ponderada formal, ou uma premissa
+explícita e documentada sobre qual NCM/subconjunto é aceito como
+representativo da cesta) - decisão Level 3 pendente, registrada aqui para
+não ser esquecida.
