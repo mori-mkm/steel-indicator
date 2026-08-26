@@ -19,8 +19,13 @@ from steel_indicator.parameters.trade_policy import STATUS_PUBLICATION_GRADE, ST
 
 
 def _linha(ano, mes, ncm, country="China", fob=6_000_000.0, kg=10_000_000.0, frete=200_000.0, seguro=20_000.0):
-    return {"year": ano, "monthNumber": mes, "ncm": ncm, "country": country,
-            "metricFOB": fob, "metricKG": kg, "metricFreight": frete, "metricInsurance": seguro}
+    # schema real da Comex Stat: `coNcm` e o CODIGO (o que resolver_ii
+    # precisa), `ncm` e so a descricao textual do produto - nunca usada
+    # para resolver politica (ver bug corrigido em
+    # custo_importacao_bottom_up_mensal, Stage E9).
+    return {"year": ano, "monthNumber": mes, "coNcm": ncm, "ncm": f"descricao textual do NCM {ncm}",
+            "country": country, "metricFOB": fob, "metricKG": kg, "metricFreight": frete,
+            "metricInsurance": seguro}
 
 
 def _dom_df(ano, mes, preco_rs_t=5000.0):
@@ -44,6 +49,22 @@ def _rodar(ano, mes, rows, preco_dom=5000.0):
             domestico_df=_dom_df(ano, mes, preco_dom))
     finally:
         m.sgs = original_sgs
+
+
+# --- 0. Regressao: resolve por coNcm (codigo), nunca por ncm (descricao) --
+# Bug real encontrado na primeira geracao end-to-end (Stage E9): a resposta
+# real da Comex Stat tem coNcm="72083700" (codigo) E ncm="Produtos
+# laminados..." (descricao) - resolver por `ncm` faz TODO grupo virar
+# UNKNOWN em silencio, mesmo num mes/NCM totalmente conhecido.
+
+def test_resolve_por_conNcm_mesmo_com_ncm_sendo_texto_descritivo():
+    linha = {"year": 2024, "monthNumber": 6, "coNcm": "72083700",
+             "ncm": "Produtos laminados planos, de ferro ou aco nao ligado, bobina a quente",
+             "country": "China", "metricFOB": 6_000_000.0, "metricKG": 10_000_000.0,
+             "metricFreight": 200_000.0, "metricInsurance": 20_000.0}
+    r = _rodar(2024, 6, [linha]).iloc[0]
+    assert r["publication_status"] == STATUS_PUBLICATION_GRADE
+    assert not np.isnan(r["ppi_rs_t"])
 
 
 # --- 1. KG-weighted average entre dois NCMs com aliquota de II diferente ----

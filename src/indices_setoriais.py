@@ -1199,10 +1199,20 @@ def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
     e status, resolvendo II/AFRMM/antidumping via trade_policy ANTES de
     qualquer soma entre NCMs ou paises (ADR 0009, decisao Level 3 do
     agregador bottom-up). `df_bruto` e o dado cru do Comex Stat (mesmo
-    formato de `_comex_bobina_bruto`: colunas year/monthNumber/ncm/country/
-    metricFOB/metricKG/metricFreight/metricInsurance) - `coNcm`/`country`
-    sao preservados aqui, ao contrario de `serie_mensal_preco_bobina`, que
-    os descarta na agregacao mensal.
+    formato de `_comex_bobina_bruto`: colunas year/monthNumber/coNcm/ncm/
+    country/metricFOB/metricKG/metricFreight/metricInsurance) - `coNcm`/
+    `country` sao preservados aqui, ao contrario de
+    `serie_mensal_preco_bobina`, que os descarta na agregacao mensal.
+
+    IMPORTANTE: o campo do CODIGO do NCM na resposta real da Comex Stat e
+    `coNcm` (ex.: "72083700") - `ncm` e a DESCRICAO textual do produto
+    (ex.: "Produtos laminados planos..."), nunca o codigo. Resolver
+    II/AFRMM/antidumping contra `ncm` (a descricao) nunca bate com nenhuma
+    entrada de `trade_policy.py` e faz TODO grupo virar UNKNOWN em
+    silencio - bug real encontrado na primeira geracao end-to-end (Stage
+    E9) com dado real do Comex Stat; os testes desta funcao usavam uma
+    fixture sintetica que colocava o codigo direto em `ncm` (nunca testou
+    contra o schema real de 2 campos). Corrigido para usar `coNcm`.
 
     Grupos com kg<=0 ou cujo mes nao tem cambio disponivel em `cambio` sao
     descartados (peso zero ou dado faltante nunca e fabricado).
@@ -1214,7 +1224,7 @@ def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df["data"] = pd.to_datetime(df["year"].astype(str) + "-"
                                  + df["monthNumber"].astype(str).str.zfill(2) + "-01")
-    g = (df.groupby(["data", "ncm", "country"], as_index=False)
+    g = (df.groupby(["data", "coNcm", "country"], as_index=False)
            .agg(fob_usd=("metricFOB", "sum"), kg=("metricKG", "sum"),
                 frete_usd=("metricFreight", "sum"), seguro_usd=("metricInsurance", "sum")))
     g = g[(g["kg"] > 0) & g["data"].isin(cambio.index)].reset_index(drop=True)
@@ -1226,7 +1236,7 @@ def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
     g["cif_usd_t"] = 1000 * (g["fob_usd"] + g["frete_usd"] + g["seguro_usd"]) / g["kg"]
     g["cif_brl_t"] = g["cif_usd_t"] * g["cambio_mes"]
 
-    res_ii = [resolver_ii(r.ncm, r.data) for r in g.itertuples()]
+    res_ii = [resolver_ii(r.coNcm, r.data) for r in g.itertuples()]
     res_afrmm = [resolver_afrmm(r.data) for r in g.itertuples()]
     res_ad = [resolver_antidumping(r.country, r.data, exporter=exporter) for r in g.itertuples()]
     g["aliquota_ii"] = [r.aliquota for r in res_ii]
@@ -1237,10 +1247,19 @@ def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
 
     conhecido = g["status"] != STATUS_UNKNOWN
     g["ppi_brl_t"] = np.nan
-    g.loc[conhecido, "ppi_brl_t"] = _ppi_brl_t(
-        g.loc[conhecido, "cif_brl_t"], g.loc[conhecido, "aliquota_ii"],
-        g.loc[conhecido, "frete_usd_t"], g.loc[conhecido, "cambio_mes"],
-        g.loc[conhecido, "aliquota_afrmm"], g.loc[conhecido, "antidumping_usd_t"], p)
+    if conhecido.any():
+        # guarda necessaria: quando NENHUM grupo do df de entrada e
+        # conhecido (ex.: um mes real onde todos os NCMs importados caem
+        # em cota/II nao confirmado), g.loc[conhecido, ...] fica vazio e
+        # `_ppi_brl_t` devolve um array vazio de dtype object - atribuir
+        # isso a uma coluna float64 levanta LossySetitemError nesta versao
+        # do pandas. O resultado correto (nenhuma linha calculada, todas
+        # ja NaN pela linha acima) e o mesmo com ou sem a guarda - ela so
+        # evita o crash quando nao ha nada a atribuir.
+        g.loc[conhecido, "ppi_brl_t"] = _ppi_brl_t(
+            g.loc[conhecido, "cif_brl_t"], g.loc[conhecido, "aliquota_ii"],
+            g.loc[conhecido, "frete_usd_t"], g.loc[conhecido, "cambio_mes"],
+            g.loc[conhecido, "aliquota_afrmm"], g.loc[conhecido, "antidumping_usd_t"], p)
     return g
 
 
@@ -1468,6 +1487,109 @@ def preco_domestico_hrc_mensal_v2(caminho_csv: str = CAMINHO_PRECO_DOMESTICO_CSV
             "companies_used", "ipp_series_id", "provenance_level", "is_proxy", "validation_status",
             "receita_total", "volume_total", "quantidade_empresas"]
     return out[cols]
+
+
+# =============================================================================
+# 3e. IPIA-HRC V2 completo - integracao import side + Domestic Price V2 (Stage E9)
+# =============================================================================
+
+_COLS_IMPORT_SIDE_V2 = ["reference_period", "ppi_rs_t", "publication_status", "total_kg",
+                        "known_policy_kg", "unknown_policy_kg", "policy_coverage",
+                        "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct"]
+
+
+def calcular_serie_ipia_hrc_v2(ppi_mensal_df: pd.DataFrame | None = None,
+                               preco_domestico_df: pd.DataFrame | None = None,
+                               ano_ini: int = 2012, ano_fim: int = 2026,
+                               df_bruto: pd.DataFrame | None = None) -> pd.DataFrame:
+    """IPIA-HRC V2 completo (Stage E9): integra o agregador bottom-up
+    multi-NCM (import side, `agregar_ipia_hrc_multi_ncm_mensal` - Stage E7)
+    com o Domestic Price V2 (`preco_domestico_hrc_mensal_v2` - Stage E8) por
+    `reference_period`, aplicando IPIA = preco_domestico_v2/ppi_v2*100
+    somente quando os dois lados forem validos no mesmo mes.
+
+    NAO recalcula II/AFRMM/antidumping, a agregacao por KG, nem
+    soma(receita)/soma(volume) - essas contas ja vem prontas nos DataFrames
+    de entrada; esta funcao SO faz merge por `reference_period` + regra de
+    status conjunta + a formula do IPIA. `ppi_mensal_df`/`preco_domestico_df`
+    aceitam o resultado ja pronto das duas funcoes V2 (mesmo padrao de
+    injecao de teste do resto do modulo) - se None, gera ao vivo com
+    `ano_ini`/`ano_fim`/`df_bruto` (`preco_domestico_df` sempre usa a fonte
+    real de `preco_domestico_hrc_mensal_v2`, que nao aceita `ano_ini`/
+    `ano_fim` - a cobertura dela vem do CSV curado e do IPP, nao de um
+    intervalo pedido pelo chamador).
+
+    As colunas `preco_domestico_rs_t`/`ipia` que `agregar_ipia_hrc_multi_ncm_mensal`
+    devolve por padrao (calculadas contra o preco domestico LEGADO, quando
+    `ppi_mensal_df` e gerado aqui sem `domestico_df` proprio) sao
+    DESCARTADAS antes do merge - `_COLS_IMPORT_SIDE_V2` mantem so as colunas
+    especificas do lado de importacao. O preco domestico final vem SEMPRE
+    de `preco_domestico_df` (V2), nunca do legado.
+
+    Regra de status conjunta (segue a decisao ja aprovada, nao reaberta
+    aqui):
+      - import side UNKNOWN -> IPIA UNKNOWN;
+      - preco domestico V2 ausente no mes (sem ancora - nunca inventado,
+        nunca forward-fill alem do que `preco_domestico_hrc_mensal_v2` ja
+        fizer) -> IPIA UNKNOWN;
+      - import EXPERIMENTAL + domestico presente -> IPIA EXPERIMENTAL;
+      - import PUBLICATION_GRADE + domestico presente -> IPIA
+        PUBLICATION_GRADE;
+      - qualquer outra combinacao -> UNKNOWN.
+
+    `domestic_is_proxy` (a ancora "Siderurgia" e o IPP 242-Siderurgia nao
+    serem especificos de HRC) e uma flag SEPARADA, ortogonal a
+    `publication_status` - PROXY nunca vira sinonimo de UNKNOWN nem de
+    EXPERIMENTAL aqui.
+    """
+    if ppi_mensal_df is None:
+        # `agregar_ipia_hrc_multi_ncm_mensal` faz seu PROPRIO merge interno
+        # com preco domestico quando `domestico_df` nao e passado (usando o
+        # CSV curado LEGADO como default) - isso recortaria o import side
+        # so aos meses onde o CSV legado tem cobertura (hoje, so 2025Q2 em
+        # diante), apagando toda a serie 2012-2025 antes mesmo de chegar ao
+        # merge com o Domestic Price V2 real, alguns paragrafos abaixo.
+        # Um domestico "curinga" com cobertura total evita esse recorte
+        # prematuro sem alterar `agregar_ipia_hrc_multi_ncm_mensal` - seu
+        # preco_rs_t nunca e usado: `_COLS_IMPORT_SIDE_V2` descarta as
+        # colunas preco_domestico_rs_t/ipia que essa chamada devolveria.
+        domestico_curinga = pd.DataFrame(
+            {"preco_rs_t": 1.0}, index=pd.date_range(f"{ano_ini}-01-01", f"{ano_fim}-12-01", freq="MS"))
+        ppi_mensal_df = agregar_ipia_hrc_multi_ncm_mensal(
+            ano_ini=ano_ini, ano_fim=ano_fim, df_bruto=df_bruto, domestico_df=domestico_curinga)
+    if preco_domestico_df is None:
+        preco_domestico_df = preco_domestico_hrc_mensal_v2()
+
+    imp = ppi_mensal_df[_COLS_IMPORT_SIDE_V2].rename(columns={"publication_status": "import_status"})
+    dom = preco_domestico_df.rename(columns={
+        "provenance_level": "domestic_provenance_level",
+        "is_proxy": "domestic_is_proxy",
+        "validation_status": "domestic_validation_status",
+    })
+
+    merged = imp.merge(dom, on="reference_period", how="outer", validate="one_to_one")
+    merged = merged.sort_values("reference_period").reset_index(drop=True)
+
+    domestico_presente = merged["preco_domestico_rs_t"].notna()
+    import_status = merged["import_status"]
+    status = pd.Series(STATUS_UNKNOWN, index=merged.index)
+    status[domestico_presente & (import_status == STATUS_EXPERIMENTAL)] = STATUS_EXPERIMENTAL
+    status[domestico_presente & (import_status == STATUS_PUBLICATION_GRADE)] = STATUS_PUBLICATION_GRADE
+    merged["publication_status"] = status
+
+    calculavel = status != STATUS_UNKNOWN
+    merged["ipia_hrc_v2"] = np.nan
+    merged.loc[calculavel, "ipia_hrc_v2"] = ipia(
+        merged.loc[calculavel, "preco_domestico_rs_t"], merged.loc[calculavel, "ppi_rs_t"])
+
+    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2", "publication_status",
+            "import_status",
+            "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
+            "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct",
+            "anchor_reference_period", "anchor_price_rs_t", "companies_used", "ipp_series_id",
+            "domestic_provenance_level", "domestic_is_proxy", "domestic_validation_status",
+            "receita_total", "volume_total", "quantidade_empresas"]
+    return merged[cols]
 
 
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
