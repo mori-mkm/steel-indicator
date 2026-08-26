@@ -707,6 +707,49 @@ transações observadas
 
 Uma fonte superior pode substituir a V1 mediante spec/ADR.
 
+## 12.9 Domestic Price V2 — implementação (Stage E8)
+
+Implementado em `preco_domestico_hrc_mensal_v2()`/`ancora_domestica_
+ponderada_v2()`/`carregar_preco_domestico_trimestral_v2()`/
+`ibge_sidra_ipp_siderurgia()` (`src/indices_setoriais.py`), caminho
+explícito e paralelo ao legado (`carregar_preco_domestico_trimestral`/
+`preco_domestico_ponderado`/`encadear_preco_domestico_mensal`, inalterados
+— a expansão mensal reaproveita `encadear_preco_domestico_mensal` sem
+modificação). Não conectado a `--selftest`/CLI/relatório nesta stage.
+
+- **§12.3/12.4** — a âncora usa `Σ receita / Σ volume` entre empresas
+  qualificadas (nunca média simples). Uma linha do CSV curado é
+  desqualificada via `tipo = "incompativel_receita_volume"` quando receita
+  e volume não cobrem o mesmo universo econômico — exclusão declarada pelo
+  curador linha a linha, não inferida numericamente, e nunca redistribuída
+  em silêncio. Hoje nenhuma linha real usa esse tipo (Usiminas/CSN são
+  compatíveis).
+- **Gerdau (§12.2)** avaliada e **não incluída**: os segmentos públicos da
+  Gerdau no Brasil reportam aço longo, não HRC/planos — receita e volume
+  não são compatíveis com a cesta HRC hoje. Não há allowlist de nomes de
+  empresa no código: uma fonte futura comprovadamente compatível entra
+  automaticamente via `tipo` qualificado no CSV curado.
+- **§12.6** — IPP trocado de CNAE 24 "Metalurgia" (tabela SIDRA 6903,
+  usado pelo legado) para o grupo industrial 242 "Siderurgia" (tabela
+  SIDRA 6723, classificação `844[47259]`, confirmado ao vivo nesta stage):
+  mais específico (exclui metalurgia não-ferrosa/fundição/ferroligas), mas
+  ainda um agregado de toda a siderurgia brasileira — nenhuma tabela IPP
+  do SIDRA quebra por produto ou por CNAE de 4+ dígitos. Corresponde ao
+  nível 3 da hierarquia de §12.6 ("IPP de siderurgia como fallback
+  documentado") — não existe fonte de nível 1/2 disponível hoje.
+- **§12.5** — `is_proxy` no output mensal é `True` quando a âncora é
+  escopo "Siderurgia" (não específico de HRC) **ou** o mês foi encadeado
+  pelo IPP (242-Siderurgia também não é específico) — hoje isso cobre
+  essencialmente todos os meses.
+- Provenance reaproveita a taxonomia já existente
+  (`steel_indicator/domain/provenance.py`: CALCULADO em `nivel_trimestral`,
+  ESTIMADO em `encadeado_ipp`/`hold_flat_fallback`) e o `validation_status`
+  reaproveita `steel_indicator/data/contracts.py`
+  (`VERIFICADO`/`DOCUMENTADO`/`A_CONFIRMAR`): o CSV curado é DOCUMENTADO
+  (conferido contra citação de página do release oficial, não executado
+  como coletor ao vivo); `ibge_sidra_ipp_siderurgia` é um coletor
+  executado ao vivo (VERIFICADO quando roda).
+
 ---
 
 # 13. IPIA-Vergalhão — preço doméstico

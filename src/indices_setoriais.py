@@ -58,6 +58,7 @@ from steel_indicator.parameters.trade_policy import (
     resolver_ii, resolver_afrmm, resolver_antidumping, status_efetivo, STATUS_UNKNOWN,
     STATUS_PUBLICATION_GRADE, STATUS_EXPERIMENTAL, PUBLICATION_GRADE_INICIO,
 )
+from steel_indicator.data.contracts import VALIDACAO_DOCUMENTADO
 
 # =============================================================================
 # 0. CONFIGURACAO
@@ -425,6 +426,110 @@ def encadear_preco_domestico_mensal(trimestral: pd.DataFrame, ipp_mensal: pd.Ser
     return pd.DataFrame(linhas).set_index("data")
 
 # =============================================================================
+# 3c. DOMESTIC PRICE V2 - ancora por soma(receita)/soma(volume) (Stage E8)
+# =============================================================================
+# Decisao Level 2 seguindo regras ja aprovadas: a ancora entre empresas passa
+# a ser soma(receita)/soma(volume) - explicito, nunca media simples entre os
+# precos das empresas (embora, nos dados curados de hoje, `preco_domestico_
+# ponderado` legado ja produza o MESMO numero: receita_i = preco_i*volume_i
+# para toda linha, por construcao de `carregar_preco_domestico_trimestral`,
+# entao media-ponderada-por-volume dos precos == soma(receita)/soma(volume).
+# A diferenca real do V2 nao esta nesse numero, e sim em (a) rejeitar
+# explicitamente uma empresa cuja receita/volume seja economicamente
+# incompativel, em vez de so poder incluir ou excluir a linha inteira do
+# CSV, e (b) usar um IPP mais especifico para o encadeamento mensal - ver
+# `ibge_sidra_ipp_siderurgia` na secao 4 e `preco_domestico_hrc_mensal_v2`
+# na secao 3d. `carregar_preco_domestico_trimestral`/`preco_domestico_
+# ponderado` (legado) permanecem inalterados.
+
+TIPO_INCOMPATIVEL_DOMESTICO = "incompativel_receita_volume"
+# Curador declara esse tipo quando receita e volume da linha NAO se referem
+# ao mesmo universo economico (ex.: receita da companhia inteira sobre
+# volume so de HRC) - mesmo padrao ja usado por "misto": um valor que o
+# curador atribui deliberadamente ao ler a fonte, nao algo que o codigo
+# infere sozinho a partir dos numeros. Nenhuma linha real do CSV curado usa
+# esse tipo hoje (Usiminas/CSN sao compativeis - receita e volume do mesmo
+# segmento "Siderurgia", mercado interno, nos dois lados).
+TIPOS_DADO_DOMESTICO_V2 = TIPOS_DADO_DOMESTICO | {TIPO_INCOMPATIVEL_DOMESTICO}
+
+
+def carregar_preco_domestico_trimestral_v2(caminho_csv: str = CAMINHO_PRECO_DOMESTICO_CSV) -> pd.DataFrame:
+    """Mesma leitura de `carregar_preco_domestico_trimestral` (legado,
+    inalterado), com duas adicoes exigidas pelo Domestic Price V2:
+
+      - `receita_efetiva_rs`: receita_liquida_segmento_rs quando informada
+        na fonte, senao reconstruida como preco_rs_t * volume_vendas_t
+        (caso da CSN, que publica "Preco Medio" pronto em vez de receita) -
+        e o numerador que `ancora_domestica_ponderada_v2` soma entre
+        empresas;
+      - `qualificado`: False quando `tipo == TIPO_INCOMPATIVEL_DOMESTICO` -
+        a linha e EXCLUIDA da agregacao por `ancora_domestica_ponderada_v2`,
+        nunca misturada silenciosamente.
+
+    Nao reescreve nem reutiliza a validacao de `carregar_preco_domestico_
+    trimestral` porque o conjunto de tipos aceitos e maior aqui
+    (`TIPOS_DADO_DOMESTICO_V2`) - duplicar essas ~10 linhas de leitura evita
+    acoplar o legado a um vocabulario que so o V2 usa.
+    """
+    df = pd.read_csv(caminho_csv)
+    obrigatorias = {"trimestre", "empresa", "volume_vendas_t", "tipo", "fonte"}
+    faltando = obrigatorias - set(df.columns)
+    if faltando:
+        raise ValueError(f"CSV de preco domestico sem colunas obrigatorias: {faltando}")
+    tipos_invalidos = set(df["tipo"]) - TIPOS_DADO_DOMESTICO_V2
+    if tipos_invalidos:
+        raise ValueError(f"tipo de dado desconhecido no CSV: {tipos_invalidos}")
+    if "preco_rs_t" not in df.columns:
+        df["preco_rs_t"] = np.nan
+    if "receita_liquida_segmento_rs" not in df.columns:
+        df["receita_liquida_segmento_rs"] = np.nan
+    precisa_calcular_preco = df["preco_rs_t"].isna()
+    df.loc[precisa_calcular_preco, "preco_rs_t"] = (
+        df.loc[precisa_calcular_preco, "receita_liquida_segmento_rs"]
+        / df.loc[precisa_calcular_preco, "volume_vendas_t"]
+    )
+    df["receita_efetiva_rs"] = df["receita_liquida_segmento_rs"].where(
+        df["receita_liquida_segmento_rs"].notna(), df["preco_rs_t"] * df["volume_vendas_t"])
+    df["qualificado"] = df["tipo"] != TIPO_INCOMPATIVEL_DOMESTICO
+    return df
+
+
+def ancora_domestica_ponderada_v2(df: pd.DataFrame) -> pd.DataFrame:
+    """Ancora domestica por trimestre: soma(receita_efetiva)/soma(volume)
+    entre empresas QUALIFICADAS - nunca media simples entre os precos das
+    empresas. Empresas com `qualificado=False` (receita/volume de universos
+    economicos incompativeis - ex.: uma Gerdau cujo unico dado publico
+    fosse aco longo, nao bobina a quente) sao excluidas explicitamente da
+    soma; a exclusao fica registrada no proprio `tipo` da linha de origem
+    (CSV curado), nunca redistribuida em silencio para as demais.
+
+    Trimestre em que NENHUMA empresa e qualificada fica de fora do
+    resultado - nao vira um ponto de peso zero fingindo ser ancora
+    confirmada. `encadear_preco_domestico_mensal` (legado, reaproveitado
+    sem alteracao por `preco_domestico_hrc_mensal_v2`) ja trata trimestre
+    ausente corretamente: carrega o ultimo trimestre confirmado adiante via
+    IPP em vez de fabricar um novo nivel para o trimestre faltante.
+    """
+    linhas = []
+    for trimestre, g in df.groupby("trimestre", sort=True):
+        qualificadas = g[g["qualificado"]]
+        if qualificadas.empty:
+            continue
+        receita_total = float(qualificadas["receita_efetiva_rs"].sum())
+        volume_total = float(qualificadas["volume_vendas_t"].sum())
+        tipo = qualificadas["tipo"].iloc[0] if qualificadas["tipo"].nunique() == 1 else "misto"
+        linhas.append({
+            "trimestre": trimestre,
+            "preco_rs_t": receita_total / volume_total,
+            "receita_total_rs": receita_total,
+            "volume_total_t": volume_total,
+            "tipo": tipo,
+            "companies_used": ",".join(sorted(qualificadas["empresa"].unique())),
+            "quantidade_empresas": int(qualificadas["empresa"].nunique()),
+        })
+    return pd.DataFrame(linhas)
+
+# =============================================================================
 # 4. COLETORES (rede)
 # =============================================================================
 
@@ -477,6 +582,37 @@ def ibge_sidra_ipp_metalurgia(periodos: str = "all") -> pd.Series:
     s = pd.to_numeric(pd.Series(serie), errors="coerce")
     s.index = pd.to_datetime(s.index, format="%Y%m")
     return s.rename("ipp_metalurgia").sort_index()
+
+
+IBGE_SIDRA_IPP_SIDERURGIA_URL = "https://servicodados.ibge.gov.br/api/v3/agregados/6723/periodos/{periodos}/variaveis/10008"
+# Tabela SIDRA 6723 ("por tipo de indice e grupos industriais selecionados"),
+# variavel 10008 (numero-indice, dez/2018=100), classificacao 844[47259] =
+# grupo industrial "242 SIDERURGIA". CONFIRMADA AO VIVO nesta sessao via
+# .../agregados/6723/metadados: mais especifica que a tabela 6903/"24
+# METALURGIA" (ibge_sidra_ipp_metalurgia, classificacao 842[46641]) porque
+# exclui metalurgia de metais nao-ferrosos, ferroligas e fundicao - e a
+# UNICA classificacao IPP do SIDRA (nenhuma tabela ativa quebra por CNAE de
+# 4+ digitos ou por produto) mais especifica que "24 Metalurgia" disponivel
+# hoje. Ainda assim e um agregado de TODA a industria siderurgica brasileira
+# (nao ha bobina a quente isolada em nenhuma tabela IPP do SIDRA) - por isso
+# permanece PROXY explicito no Domestic Price V2 (ver
+# `preco_domestico_hrc_mensal_v2` e docs/METODOLOGIA.md).
+IBGE_IPP_CLASSIFICACAO_SIDERURGIA = "844[47259]"
+
+
+def ibge_sidra_ipp_siderurgia(periodos: str = "all") -> pd.Series:
+    """IPP mensal do IBGE/SIDRA, grupo industrial 242 - Siderurgia (numero-
+    indice, dez/2018=100) - usado para encadear a ancora trimestral do
+    Domestic Price V2 (`preco_domestico_hrc_mensal_v2`). Mais especifico que
+    `ibge_sidra_ipp_metalurgia` (CNAE 24, usado pelo legado), mas ainda um
+    agregado de toda a siderurgia - ver nota acima.
+    """
+    url = IBGE_SIDRA_IPP_SIDERURGIA_URL.format(periodos=periodos)
+    dados = _get_json(url, {"localidades": "N1[all]", "classificacao": IBGE_IPP_CLASSIFICACAO_SIDERURGIA})
+    serie = dados[0]["resultados"][0]["series"][0]["serie"]
+    s = pd.to_numeric(pd.Series(serie), errors="coerce")
+    s.index = pd.to_datetime(s.index, format="%Y%m")
+    return s.rename("ipp_siderurgia").sort_index()
 
 
 # --- Taxa de Penetracao das Importacoes (Instituto Aco Brasil) -------------
@@ -1230,6 +1366,107 @@ def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
     cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia", "publication_status",
             "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
             "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct"]
+    return out[cols]
+
+
+# =============================================================================
+# 3d. Domestic Price V2 - orquestrador mensal (Stage E8)
+# =============================================================================
+
+IPP_SIDERURGIA_SERIES_ID = "ibge_sidra_6723_844_47259_siderurgia"
+
+_VALIDACAO_ANCORA_CSV_CURADO = VALIDACAO_DOCUMENTADO
+# O CSV curado (data/curated/preco_domestico_aco.csv) e lido e conferido por
+# citacao de pagina do release oficial (curadoria manual - ver comentario no
+# topo da secao "3b. ANCORA DE PRECO DOMESTICO"): confirmado em documentacao
+# oficial, mas nao executado como coletor automatizado contra uma fonte ao
+# vivo. Corresponde a DOCUMENTADO (docs/METODOLOGIA.md secao 5.2), nao
+# VERIFICADO (reservado para fontes executadas programaticamente, como
+# `ibge_sidra_ipp_siderurgia`). Uma unica constante e suficiente hoje porque
+# todas as linhas do CSV curado compartilham a mesma base de evidencia -
+# quando isso deixar de ser verdade, o status passa a ser por linha, nao
+# global.
+
+
+def preco_domestico_hrc_mensal_v2(caminho_csv: str = CAMINHO_PRECO_DOMESTICO_CSV,
+                                   df_trimestral: pd.DataFrame | None = None,
+                                   ipp_mensal: pd.Series | None = None) -> pd.DataFrame:
+    """Domestic Price V2 do IPIA-HRC (Stage E8, decisao Level 2 seguindo
+    regras de metodologia ja aprovadas): ancora trimestral por
+    soma(receita)/soma(volume) entre empresas qualificadas (nunca media
+    simples entre precos - ver `ancora_domestica_ponderada_v2`), encadeada
+    mes a mes pelo IPP 242-Siderurgia (`ibge_sidra_ipp_siderurgia`, mais
+    especifico que o 24-Metalurgia do legado, mas ainda PROXY - nunca
+    especifico de bobina a quente). Caminho explicito e paralelo - NAO
+    substitui `carregar_preco_domestico_trimestral`/`preco_domestico_
+    ponderado`/`encadear_preco_domestico_mensal` (legado, inalterados; a
+    expansao mensal REAPROVEITA `encadear_preco_domestico_mensal` sem
+    nenhuma modificacao - a regra de encadeamento/hold-flat/sem-look-ahead
+    ja estava correta).
+
+    Gerdau NAO esta na cesta hoje: seus segmentos publicos (aco longo,
+    Brasil) nao reportam receita/volume compativeis com bobina a quente -
+    incluir Gerdau exigiria antes confirmar uma fonte com escopo
+    compativel, o que nao existe hoje. Isso nao e uma allowlist de nomes de
+    empresa no codigo: se e quando essa evidencia existir, uma linha no CSV
+    curado com `tipo` qualificado (nao `TIPO_INCOMPATIVEL_DOMESTICO`) passa
+    a ser incluida automaticamente por `ancora_domestica_ponderada_v2`.
+
+    `df_trimestral` (mesmo formato de `ancora_domestica_ponderada_v2`) e
+    `ipp_mensal` aceitam dado ja pronto (mesmo padrao de injecao de teste
+    do resto do modulo) - se None, busca a fonte real (CSV curado local +
+    IBGE/SIDRA ao vivo).
+
+    Saida mensal com pelo menos: reference_period, preco_domestico_rs_t,
+    anchor_reference_period, anchor_price_rs_t, companies_used,
+    ipp_series_id, provenance_level, is_proxy, validation_status (mais
+    receita_total/volume_total/quantidade_empresas). `is_proxy` e True
+    quando a ancora e escopo "Siderurgia" (nao especifico de HRC) OU o mes
+    foi encadeado pelo IPP (tambem um agregado de siderurgia, nunca
+    especifico) - hoje isso cobre essencialmente todos os meses, porque
+    nenhuma das duas fontes e HRC-especifica ainda (ver
+    docs/METODOLOGIA.md).
+
+    NAO conectado a --selftest/CLI/relatorio nesta stage - mesmo status dos
+    demais caminhos V2 (peca de calculo interna, testada).
+    """
+    if df_trimestral is None:
+        bruto = carregar_preco_domestico_trimestral_v2(caminho_csv)
+        ancora = ancora_domestica_ponderada_v2(bruto)
+    else:
+        ancora = df_trimestral
+    if ancora.empty:
+        return ancora
+    if ipp_mensal is None:
+        ipp_mensal = ibge_sidra_ipp_siderurgia()
+
+    mensal = encadear_preco_domestico_mensal(ancora[["trimestre", "preco_rs_t", "tipo"]], ipp_mensal)
+    ancora_por_trimestre = ancora.set_index("trimestre")
+
+    linhas = []
+    for data, linha in mensal.iterrows():
+        base = ancora_por_trimestre.loc[linha["trimestre_base"]]
+        vintage = classificar_preco_domestico(pd.Series(
+            {"tipo_dado_domestico": linha["tipo_dado"], "metodo_domestico": linha["metodo"]}, name=data))
+        is_proxy = bool(vintage.proxy) or (linha["metodo"] == "encadeado_ipp")
+        linhas.append({
+            "reference_period": data,
+            "preco_domestico_rs_t": linha["preco_rs_t"],
+            "anchor_reference_period": linha["trimestre_base"],
+            "anchor_price_rs_t": float(base["preco_rs_t"]),
+            "companies_used": base["companies_used"],
+            "ipp_series_id": IPP_SIDERURGIA_SERIES_ID,
+            "provenance_level": vintage.nivel,
+            "is_proxy": is_proxy,
+            "validation_status": _VALIDACAO_ANCORA_CSV_CURADO,
+            "receita_total": float(base["receita_total_rs"]),
+            "volume_total": float(base["volume_total_t"]),
+            "quantidade_empresas": int(base["quantidade_empresas"]),
+        })
+    out = pd.DataFrame(linhas)
+    cols = ["reference_period", "preco_domestico_rs_t", "anchor_reference_period", "anchor_price_rs_t",
+            "companies_used", "ipp_series_id", "provenance_level", "is_proxy", "validation_status",
+            "receita_total", "volume_total", "quantidade_empresas"]
     return out[cols]
 
 
