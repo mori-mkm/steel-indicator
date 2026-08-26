@@ -54,6 +54,9 @@ from steel_indicator.domain.provenance import (
     METODO_FORMULA_ALTERNATIVA, VintageInfo, vintage_table, validar_report_cutoff,
 )
 from steel_indicator.sources.comex import COMEX_URL, comex_importacao_ncm
+from steel_indicator.parameters.trade_policy import (
+    resolver_ii, resolver_afrmm, resolver_antidumping, status_efetivo, STATUS_UNKNOWN,
+)
 
 # =============================================================================
 # 0. CONFIGURACAO
@@ -225,6 +228,71 @@ def custo_importacao_rs_t(preco_fob_usd_t: pd.Series,
         "cif_usd_t": cif_usd, "cif_brl_t": cif_brl, "ii_brl_t": ii,
         "afrmm_brl_t": afrmm, "antidumping_brl_t": ad_brl, "ppi_brl_t": total,
     })
+
+
+def custo_importacao_historico_mensal(preco_fob_usd_t: pd.Series,
+                                      frete_usd_t: pd.Series,
+                                      seguro_usd_t: pd.Series,
+                                      cambio: pd.Series,
+                                      ncm: str,
+                                      origin: str = "China",
+                                      exporter: Optional[str] = None,
+                                      p: Optional[ParamsIPIA] = None) -> pd.DataFrame:
+    """Mesma formula de `custo_importacao_rs_t`, mas com II/AFRMM/antidumping
+    resolvidos MES A MES via steel_indicator.parameters.trade_policy (Stage
+    E4/E4b, ADR 0009) em vez dos escalares fixos de ParamsIPIA - a formula
+    economica em si (CIF -> base -> total com margem) nao muda.
+
+    Precedencia explicita: `p.aliquota_ii`, `p.afrmm` e `p.antidumping_usd_t`
+    sao IGNORADOS aqui (resolvidos por `ncm`/`origin`/`exporter`/mes via
+    trade_policy). `p.despesas_porto_rs_t`, `p.frete_interno_rs_t` e
+    `p.margem_importador` continuam vindo do parametro escalar - esses tres
+    nao foram investigados nesta stage (fora de escopo: docs/adr/0009-*.md).
+
+    Usa sempre `effective_value` do antidumping (nunca `nominal_value`) -
+    ver `ResultadoAntidumping`. `nominal_value` fica preservado na coluna
+    `antidumping_nominal_usd_t` apenas como provenance/informacao.
+
+    Nunca preenche um mes com status_efetivo() == UNKNOWN com zero ou com o
+    parametro atual como fallback: esse mes fica com `ppi_brl_t` (e as
+    colunas monetarias que dependem do parametro faltante) como NaN. A
+    coluna `status` registra PUBLICATION_GRADE/EXPERIMENTAL/UNKNOWN por mes.
+
+    Nao substitui `custo_importacao_rs_t`/`calcular_ipia_mensal` (legacy,
+    ParamsIPIA escalar) - ambos permanecem inalterados e continuam sendo o
+    caminho usado por --selftest/CLI/relatorio ate uma decisao explicita de
+    migracao.
+    """
+    if p is None:
+        p = ParamsIPIA()
+    linhas = []
+    for data in preco_fob_usd_t.index:
+        r_ii = resolver_ii(ncm, data)
+        r_afrmm = resolver_afrmm(data)
+        r_ad = resolver_antidumping(origin, data, exporter=exporter)
+        status = status_efetivo(r_ii.status, r_afrmm.status, r_ad.status)
+
+        cambio_mes = cambio.loc[data]
+        cif_usd = preco_fob_usd_t.loc[data] + frete_usd_t.loc[data] + seguro_usd_t.loc[data]
+        cif_brl = cif_usd * cambio_mes
+
+        linha = {
+            "data": data, "status": status,
+            "aliquota_ii": r_ii.aliquota, "aliquota_afrmm": r_afrmm.aliquota,
+            "antidumping_usd_t": r_ad.effective_value, "antidumping_nominal_usd_t": r_ad.nominal_value,
+            "cif_usd_t": cif_usd, "cif_brl_t": cif_brl,
+        }
+        if status == STATUS_UNKNOWN:
+            linha.update(ii_brl_t=np.nan, afrmm_brl_t=np.nan, antidumping_brl_t=np.nan, ppi_brl_t=np.nan)
+        else:
+            ii = cif_brl * r_ii.aliquota
+            afrmm = (frete_usd_t.loc[data] * cambio_mes) * r_afrmm.aliquota
+            ad_brl = r_ad.effective_value * cambio_mes
+            base = cif_brl + ii + afrmm + ad_brl + p.despesas_porto_rs_t + p.frete_interno_rs_t
+            total = base * (1 + p.margem_importador)
+            linha.update(ii_brl_t=ii, afrmm_brl_t=afrmm, antidumping_brl_t=ad_brl, ppi_brl_t=total)
+        linhas.append(linha)
+    return pd.DataFrame(linhas).set_index("data")
 
 
 def ipia(preco_domestico_rs_t: pd.Series, ppi_rs_t: pd.Series) -> pd.Series:
