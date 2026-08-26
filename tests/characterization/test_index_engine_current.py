@@ -134,3 +134,44 @@ def test_validacao_por_pca_executa_e_reporta_variancia_explicada():
     v = m.validar_com_pca(_z2df())
     assert v.get("ok")
     assert "var_explicada_pc1" in v
+
+
+def test_transform_none_retorna_serie_original():
+    s = m._serie_sintetica(seed=8)
+    out = m.aplicar_transform(s, None)
+    assert (out == s).all()
+
+
+def test_transform_log_aplica_log_e_ignora_nao_positivos():
+    s = pd.Series([1.0, np.e, -1.0, 0.0], index=pd.date_range("2020-01-01", periods=4, freq="MS"))
+    out = m.aplicar_transform(s, "log")
+    assert abs(float(out.iloc[0]) - 0.0) < 1e-9
+    assert abs(float(out.iloc[1]) - 1.0) < 1e-9
+    assert bool(pd.isna(out.iloc[2]))
+    assert bool(pd.isna(out.iloc[3]))
+
+
+def test_transform_var12m_e_variacao_percentual_de_12_meses():
+    s = m._serie_sintetica(seed=9)
+    out = m.aplicar_transform(s, "var12m")
+    esperado = s.pct_change(12) * 100
+    assert float((out - esperado).abs().max()) < 1e-9
+
+
+def test_transform_var12m_real_exige_deflator():
+    s = m._serie_sintetica(seed=10)
+    with pytest.raises(ValueError):
+        m.aplicar_transform(s, "var12m_real")
+
+
+def test_transform_var12m_real_deflaciona_antes_da_variacao():
+    s = m._serie_sintetica(seed=10)
+    deflator = m._serie_sintetica(seed=11) + 100.0
+    out = m.aplicar_transform(s, "var12m_real", deflator=deflator)
+    esperado = (s / deflator).pct_change(12) * 100
+    assert float((out - esperado).abs().max()) < 1e-9
+
+
+def test_transform_desconhecida_levanta_erro():
+    with pytest.raises(ValueError):
+        m.aplicar_transform(m._serie_sintetica(seed=12), "nao_existe")
