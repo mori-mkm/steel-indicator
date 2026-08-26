@@ -53,6 +53,7 @@ from steel_indicator.domain.provenance import (
     NIVEL_OBSERVADO, NIVEL_CALCULADO, NIVEL_ESTIMADO, NIVEIS_DADO,
     METODO_FORMULA_ALTERNATIVA, VintageInfo, vintage_table, validar_report_cutoff,
 )
+from steel_indicator.sources.comex import COMEX_URL, comex_importacao_ncm
 
 # =============================================================================
 # 0. CONFIGURACAO
@@ -87,7 +88,7 @@ SGS = {
 
 SGS_URL   = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{cod}/dados?formato=json"
 SGS_ULT   = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{cod}/dados/ultimos/{n}?formato=json"
-COMEX_URL = "https://api-comexstat.mdic.gov.br/general"
+# COMEX_URL agora vive em steel_indicator/sources/comex.py (Spec 0003, Stage E1) - importado acima.
 SCR_BASE  = "https://www.bcb.gov.br/pda/desig/planilha_{aaaamm}.zip"  # confira no portal
 
 # --- NCM de 8 digitos: bobina laminada a quente, nao ligada, largura >=600mm
@@ -372,22 +373,10 @@ def _get_json(url: str, params: dict | None = None, tentativas: int = 3):
             time.sleep(2 ** i)
 
 
-def _post_json(url: str, payload: dict, tentativas: int = 3):
-    """POST com JSON no corpo. O endpoint /general do Comex Stat exige POST -
-    uma chamada GET com o filtro na querystring (como uma versao anterior
-    deste script fazia) recebe 403 do WAF da API, nao por falta de acesso."""
-    import requests
-    for i in range(tentativas):
-        try:
-            r = requests.post(url, json=payload, timeout=60,
-                              headers={"User-Agent": "pesquisa-setorial/1.0",
-                                       "Content-Type": "application/json"})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            if i == tentativas - 1:
-                raise
-            time.sleep(2 ** i)
+# _post_json (helper de POST usado so pelo Comex Stat) e comex_importacao_ncm
+# agora vivem em steel_indicator/sources/comex.py (Spec 0003, Stage E1) -
+# comex_importacao_ncm importado acima; _post_json e privado ao adapter e
+# nao e usado por mais nenhum codigo deste modulo.
 
 
 def sgs(codigo: int, inicio: str = "01/01/2010") -> pd.Series:
@@ -654,28 +643,16 @@ def taxa_penetracao_importacao_planos_mensal(ano_ini: int = 2013, ano_fim: int |
     return pd.concat([hist_sem_sobreposicao, oficial_planos]).sort_index()
 
 
-def comex_importacao_ncm(ncm: List[str], ano_ini: int, ano_fim: int) -> pd.DataFrame:
-    """Importacao por NCM no Comex Stat, com valor FOB, frete, seguro e peso.
-
-    O valor unitario daqui (FOB / peso) e o preco que o importador brasileiro
-    efetivamente pagou - para efeito de paridade, e uma referencia melhor que a
-    cotacao FOB de origem, e nao depende de licenca de agencia de precos.
-    """
-    payload = {
-        "flow": "import",
-        "monthDetail": True,
-        "period": {"from": f"{ano_ini}-01", "to": f"{ano_fim}-12"},
-        "filters": [{"filter": "ncm", "values": ncm}],
-        "details": ["ncm", "country"],
-        "metrics": ["metricFOB", "metricKG", "metricFreight", "metricInsurance"],
-    }
-    dados = _post_json(COMEX_URL, payload)
-    if "data" not in dados:
-        # a resposta veio, mas nao no formato esperado - imprime as chaves
-        # de topo para facilitar o diagnostico em vez de falhar silencioso
-        raise ValueError(f"resposta sem campo 'data'; chaves recebidas: {list(dados.keys())}")
-    lista = dados.get("data", {}).get("list", [])
-    return pd.DataFrame(lista)
+# comex_importacao_ncm agora vive em steel_indicator/sources/comex.py (Spec
+# 0003, Stage E1) - importado acima. _comex_bobina_bruto permanece AQUI de
+# proposito: ele decide a cesta HRC (NCM_BOBINA_QUENTE), o que e premissa
+# metodologica do IPIA-HRC V1, nao contrato generico do adapter Comex (ver
+# docs/specs/0003-modularize-engine.md Stage E1). O nome `comex_importacao_ncm`
+# e resolvido pelo namespace deste modulo em tempo de chamada (late binding),
+# o que preserva o mecanismo de bloqueio de rede usado por selftest() e por
+# tests/characterization/test_data_integration_current.py (reatribuir
+# `indices_setoriais.comex_importacao_ncm` continua interceptando esta
+# chamada - ver tests/characterization/test_comex_current.py).
 
 def _comex_bobina_bruto(ano_ini: int, ano_fim: int) -> pd.DataFrame:
     """Busca o dado bruto de importacao (Comex Stat) dos 13 NCMs de bobina
