@@ -1,6 +1,7 @@
-"""Validacao generica de contrato de dados: colunas obrigatorias e indice
-temporal minimo. Nenhuma funcao aqui envolve rede, arquivo ou dataclass de
-transporte - series/tabelas continuam sendo pandas DataFrame/Series.
+"""Validacao generica de contrato de dados: colunas obrigatorias, indice
+temporal minimo e taxonomia de status de validacao de fonte. Nenhuma funcao
+aqui envolve rede, arquivo ou dataclass de transporte - series/tabelas
+continuam sendo pandas DataFrame/Series.
 
 Extraido como infraestrutura preparatoria (Spec 0003, Stage C2 / batch 3),
 generalizando um idioma ja existente no projeto (`EspecIndice.validar()` em
@@ -20,11 +21,29 @@ Deliberadamente NAO validado aqui (nao formalizado ainda, ver docs/specs/
 
 Este modulo ainda nao e chamado por nenhum produtor/consumidor existente -
 e infraestrutura testada, pronta para ser adotada incrementalmente.
+
+VALIDACAO_* / VALIDACOES_STATUS: taxonomia de status de validade/qualidade de
+FONTE (ver docs/METODOLOGIA.md secao 5.2 e docs/data-sources.md) - distinta
+da taxonomia OBSERVADO/CALCULADO/ESTIMADO/PROXY de numero publicado
+(domain/provenance.py, Batch 2). Fica aqui, nao em storage/manifest.py,
+porque e um contrato compartilhado: sera usado por CollectionVintage (Stage
+C3) e, futuramente, por source adapters e validacao (Stage E) - nao e
+propriedade exclusiva de nenhum consumidor especifico.
 """
 from __future__ import annotations
 from typing import Iterable
 
 import pandas as pd
+
+VALIDACAO_VERIFICADO = "VERIFICADO"
+VALIDACAO_DOCUMENTADO = "DOCUMENTADO"
+VALIDACAO_A_CONFIRMAR = "A_CONFIRMAR"
+
+VALIDACOES_STATUS = (
+    VALIDACAO_VERIFICADO,
+    VALIDACAO_DOCUMENTADO,
+    VALIDACAO_A_CONFIRMAR,
+)
 
 
 def validar_colunas_obrigatorias(df: pd.DataFrame, obrigatorias: Iterable[str],

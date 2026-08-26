@@ -5,7 +5,10 @@ on indices_setoriais or any index-specific logic.
 import pandas as pd
 import pytest
 
-from steel_indicator.data.contracts import validar_colunas_obrigatorias, validar_indice_temporal
+from steel_indicator.data.contracts import (
+    validar_colunas_obrigatorias, validar_indice_temporal,
+    VALIDACAO_VERIFICADO, VALIDACAO_DOCUMENTADO, VALIDACAO_A_CONFIRMAR, VALIDACOES_STATUS,
+)
 
 
 # --- validar_colunas_obrigatorias -------------------------------------------
@@ -84,3 +87,16 @@ def test_validar_indice_temporal_falha_para_timestamps_duplicados():
     df = pd.DataFrame({"v": [1, 2, 3]}, index=idx)
     with pytest.raises(ValueError, match="duplicados"):
         validar_indice_temporal(df)
+
+
+# --- taxonomia VALIDACAO_* / VALIDACOES_STATUS -------------------------------
+
+def test_valores_de_validacao_existem():
+    assert VALIDACAO_VERIFICADO == "VERIFICADO"
+    assert VALIDACAO_DOCUMENTADO == "DOCUMENTADO"
+    assert VALIDACAO_A_CONFIRMAR == "A_CONFIRMAR"
+
+
+def test_validacoes_status_contem_exatamente_os_tres_valores_aceitos():
+    assert VALIDACOES_STATUS == (VALIDACAO_VERIFICADO, VALIDACAO_DOCUMENTADO, VALIDACAO_A_CONFIRMAR)
+    assert len(set(VALIDACOES_STATUS)) == 3
