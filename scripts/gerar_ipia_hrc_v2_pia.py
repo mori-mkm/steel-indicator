@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage E11: gera a serie IPIA-HRC V2 PIA-based, integrando o import side
-bottom-up multi-NCM (Stage E7, ja aprovado) com o Domestic Price V2 caminho
-PIA (Stage E10/ADR 0010, ja aprovado) via
+"""Stage E11/G2: gera a serie IPIA-HRC V2 PIA-based, integrando o import
+side bottom-up multi-NCM (Stage E7, ja aprovado) com o Domestic Price V2
+caminho PIA (Stage E10/ADR 0010, ja aprovado) via
 `indices_setoriais.calcular_ipia_hrc_v2_pia()` (Stage E11/ADR 0011),
 incluindo o quarto status PROVISIONAL e a separacao explicita entre saida
-oficial e provisional (`separar_ipia_hrc_v2_oficial_provisional`).
+oficial e provisional (`separar_ipia_hrc_v2_oficial_provisional`), e
+persiste cada execucao como uma vintage append-only/imutavel (Stage
+G2/ADR 0012 - `indices_setoriais.salvar_vintage_ipia_hrc_v2`).
 
 NAO e codigo de producao/publicacao: gera artefatos analiticos de
-VALIDACAO (2 CSVs + grafico), nao o relatorio PDF oficial. Nao altera
-`--selftest`, a CLI principal, `report_builder.py` nem nenhum caminho
-legado - mesmo status dos demais scripts scripts/gerar_*.py.
+VALIDACAO (2 CSVs "latest" + grafico + vintage local), nao o relatorio
+PDF oficial. Nao altera `--selftest`, a CLI principal, `report_builder.py`
+nem nenhum caminho legado - mesmo status dos demais scripts
+scripts/gerar_*.py.
+
+Fluxo normal (Stage G2): se ja existir uma vintage anterior, este script
+carrega automaticamente o official.csv dela e usa como `congelado_df` -
+meses ja publicados como oficiais permanecem congelados. A PRIMEIRA
+execucao (sem vintage anterior) roda sem congelado_df.
 
 Uso:
     python scripts/gerar_ipia_hrc_v2_pia.py
 
 Produz:
-    data/processed/ipia_hrc_v2_official.csv
-    data/processed/ipia_hrc_v2_provisional.csv
-    data/processed/ipia_hrc_v2_pia_validation.png
+    data/processed/ipia_hrc_v2_official.csv       (LATEST - sobrescrito a cada execucao)
+    data/processed/ipia_hrc_v2_provisional.csv    (LATEST - sobrescrito a cada execucao)
+    data/processed/ipia_hrc_v2_pia_validation.png (LATEST - sobrescrito a cada execucao)
+    data/processed/vintages/ipia_hrc_v2/<vintage_id>/  (IMUTAVEL - nunca sobrescrito)
 
 Faz chamadas de rede reais (Comex Stat, BCB/SGS, IBGE/SIDRA). Mesmo
 workaround de janela segura do BCB SGS (<=10 anos por pedaco) ja usado em
@@ -45,6 +54,11 @@ ANO_INI, ANO_FIM = 2012, 2026
 CSV_OFICIAL = "data/processed/ipia_hrc_v2_official.csv"
 CSV_PROVISIONAL = "data/processed/ipia_hrc_v2_provisional.csv"
 PNG_SAIDA = "data/processed/ipia_hrc_v2_pia_validation.png"
+VINTAGE_BASE_DIR = m.VINTAGE_BASE_DIR_PADRAO
+
+
+def _agora_utc_iso() -> str:
+    return pd.Timestamp.now(tz="UTC").isoformat()
 
 
 def _buscar_comex_bruto_com_retry(tentativas: int = 4, espera_s: float = 20.0) -> pd.DataFrame:
@@ -220,17 +234,69 @@ def gerar_grafico_validacao(serie: pd.DataFrame, caminho_png: str) -> None:
     plt.close(fig)
 
 
+def reportar_vintage(manifest: dict, vintage_anterior: dict | None,
+                     oficial_final: pd.DataFrame, provisional_final: pd.DataFrame) -> None:
+    print("\n=== VINTAGE ===")
+    print(f"  vintage_id:          {manifest['vintage_id']}")
+    print(f"  previous_vintage_id: {manifest['previous_vintage_id']}")
+    print(f"  methodology_version: {manifest['methodology_version']}")
+    print(f"  last_pia_year:       {manifest['sources']['pia_last_observed_year']}")
+    print(f"  official coverage:    {manifest['coverage']['official_first_period']} -> "
+          f"{manifest['coverage']['official_last_period']}")
+    print(f"  provisional coverage: {manifest['coverage']['provisional_first_period']} -> "
+          f"{manifest['coverage']['provisional_last_period']}")
+
+    revisados = int(oficial_final["revised"].sum()) + int(provisional_final["revised"].sum())
+    print(f"  revised rows (official+provisional): {revisados}")
+
+    if vintage_anterior is None:
+        print("  new rows: n/a (primeira vintage)")
+        print("  promoted provisional -> official: n/a (primeira vintage)")
+        return
+
+    meses_anteriores = (set(vintage_anterior["official"]["reference_period"])
+                        | set(vintage_anterior["provisional"]["reference_period"]))
+    meses_provisional_anterior = set(vintage_anterior["provisional"]["reference_period"])
+    meses_novos_agora = set(oficial_final["reference_period"]) | set(provisional_final["reference_period"])
+    meses_realmente_novos = meses_novos_agora - meses_anteriores
+    promovidos = meses_provisional_anterior & set(oficial_final["reference_period"])
+
+    print(f"  new rows: {len(meses_realmente_novos)}")
+    print(f"  promoted provisional -> official: {len(promovidos)}")
+    if promovidos:
+        for mes in sorted(promovidos):
+            print(f"    {mes:%Y-%m}")
+
+
 def main() -> None:
-    print(f"=== Buscando dado bruto do Comex Stat ({ANO_INI}-{ANO_FIM}) ===")
+    fetch_at_utc: dict[str, str] = {}
+
+    vintage_anterior = None
+    ultima = m.ultima_vintage_ipia_hrc_v2(base_dir=VINTAGE_BASE_DIR)
+    if ultima is not None:
+        print(f"=== Vintage anterior encontrada: {ultima} ===")
+        vintage_anterior = m.carregar_vintage_ipia_hrc_v2(ultima, base_dir=VINTAGE_BASE_DIR)
+        print(f"  official anterior: {len(vintage_anterior['official'])} meses "
+              f"({vintage_anterior['manifest']['coverage']['official_first_period']} -> "
+              f"{vintage_anterior['manifest']['coverage']['official_last_period']}) - "
+              f"sera usado como congelado_df no fluxo normal")
+    else:
+        print("=== Nenhuma vintage anterior - esta sera a PRIMEIRA vintage ===")
+
+    print(f"\n=== Buscando dado bruto do Comex Stat ({ANO_INI}-{ANO_FIM}) ===")
+    fetch_at_utc["comex_fetch_at_utc"] = _agora_utc_iso()
     df_bruto = _buscar_comex_bruto_com_retry()
     print(f"  {len(df_bruto)} linhas brutas")
 
     print("\n=== Import side V2 (bottom-up multi-NCM) ===")
+    fetch_at_utc["bcb_fetch_at_utc"] = _agora_utc_iso()  # cambio/PTAX, buscado dentro desta chamada
     ppi_mensal = gerar_import_side_2012_2026(df_bruto)
     print(f"  {len(ppi_mensal)} meses calculaveis (com dado Comex no periodo)")
 
     print("\n=== Domestic Price V2 - caminho PIA ===")
+    fetch_at_utc["pia_fetch_at_utc"] = _agora_utc_iso()
     pia = m.ibge_sidra_pia_hrc_anual()
+    fetch_at_utc["ipp_fetch_at_utc"] = _agora_utc_iso()
     ipp = m.ibge_sidra_ipp_siderurgia()
     preco_domestico_pia = m.preco_domestico_hrc_pia_v2(pia_anual_df=pia, ipp_mensal=ipp)
     print(f"  {len(preco_domestico_pia)} meses "
@@ -238,22 +304,36 @@ def main() -> None:
           f"{int(preco_domestico_pia['is_provisional'].sum())} provisional)")
 
     print("\n=== Integrando IPIA-HRC V2 PIA-based ===")
-    serie = m.calcular_ipia_hrc_v2_pia(ppi_mensal_df=ppi_mensal, pia_domestico_df=preco_domestico_pia)
+    congelado_df = vintage_anterior["official"] if vintage_anterior is not None else None
+    serie = m.calcular_ipia_hrc_v2_pia(ppi_mensal_df=ppi_mensal, pia_domestico_df=preco_domestico_pia,
+                                       congelado_df=congelado_df)
     print(f"  {len(serie)} meses no output completo (todos os 4 status, antes de separar oficial/provisional)")
 
     oficial, provisional = m.separar_ipia_hrc_v2_oficial_provisional(serie)
 
+    # LATEST outputs (comportamento ja existente, preservado sem alteracao -
+    # sobrescritos a cada execucao, sempre representam a leitura mais
+    # recente; a copia IMUTAVEL correspondente vive na pasta da vintage).
     os.makedirs(os.path.dirname(CSV_OFICIAL), exist_ok=True)
     oficial.to_csv(CSV_OFICIAL, index=False)
     provisional.to_csv(CSV_PROVISIONAL, index=False)
-    print(f"\nCSV oficial salvo em:      {CSV_OFICIAL}")
-    print(f"CSV provisional salvo em:  {CSV_PROVISIONAL}")
+    print(f"\nCSV oficial (latest) salvo em:      {CSV_OFICIAL}")
+    print(f"CSV provisional (latest) salvo em:  {CSV_PROVISIONAL}")
 
     gerar_grafico_validacao(serie, PNG_SAIDA)
-    print(f"Grafico de validacao salvo em: {PNG_SAIDA}")
+    print(f"Grafico de validacao (latest) salvo em: {PNG_SAIDA}")
+
+    print("\n=== Persistindo vintage imutavel ===")
+    manifest = m.salvar_vintage_ipia_hrc_v2(
+        serie, import_side_df=ppi_mensal, domestic_price_df=preco_domestico_pia,
+        vintage_anterior=vintage_anterior, base_dir=VINTAGE_BASE_DIR, sources_fetch_at_utc=fetch_at_utc)
+    vintage_nova = m.carregar_vintage_ipia_hrc_v2(manifest["vintage_id"], base_dir=VINTAGE_BASE_DIR)
+    print(f"  vintage criada em: {VINTAGE_BASE_DIR}/{m.VINTAGE_PRODUTO_IPIA_HRC_V2}/{manifest['vintage_id']}")
+    print(f"  hashes: OK ({len(manifest['hashes'])} arquivo(s))")
 
     reportar_oficial(oficial)
     reportar_provisional(provisional)
+    reportar_vintage(manifest, vintage_anterior, vintage_nova["official"], vintage_nova["provisional"])
     comparar_com_ipia_corporate(serie, ppi_mensal)
 
 

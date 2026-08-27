@@ -37,7 +37,7 @@
 =============================================================================
 """
 from __future__ import annotations
-import argparse, json, re, sys, time, datetime as dt
+import argparse, json, math, re, sys, time, datetime as dt
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable
 
@@ -59,6 +59,7 @@ from steel_indicator.parameters.trade_policy import (
     STATUS_PUBLICATION_GRADE, STATUS_EXPERIMENTAL, PUBLICATION_GRADE_INICIO,
 )
 from steel_indicator.data.contracts import VALIDACAO_DOCUMENTADO, VALIDACAO_VERIFICADO
+from steel_indicator.storage import vintage_store
 
 # =============================================================================
 # 0. CONFIGURACAO
@@ -2093,6 +2094,266 @@ def separar_ipia_hrc_v2_oficial_provisional(serie: pd.DataFrame) -> tuple[pd.Dat
     provisional = serie[serie["publication_status"] == STATUS_PROVISIONAL]
     return (oficial[_COLS_IPIA_HRC_V2_PIA_OFICIAL].reset_index(drop=True),
             provisional[_COLS_IPIA_HRC_V2_PIA_PROVISIONAL].reset_index(drop=True))
+
+
+# =============================================================================
+# 3h. IPIA-HRC V2 - vintages de publicacao append-only (Stage G2, ADR 0012)
+# =============================================================================
+# Persistencia local/imutavel de CADA execucao de calcular_ipia_hrc_v2_pia()
+# como uma "vintage" (conceito D de manifest.py, ate aqui nao implementado)
+# - mecanica generica (ID, escrita atomica, hash, indice, carga) delegada a
+# steel_indicator.storage.vintage_store; este bloco so contem a integracao
+# ECONOMICA especifica do IPIA-HRC V2 (quais colunas comparar para
+# `revised`, quais campos entram no manifest) - nenhuma logica generica de
+# storage e duplicada aqui.
+
+VINTAGE_PRODUTO_IPIA_HRC_V2 = "ipia_hrc_v2"
+VINTAGE_BASE_DIR_PADRAO = "data/processed/vintages"
+
+_COLS_REVISED_NUMERICAS = ("preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2")
+
+
+def calcular_revised(serie_atual: pd.DataFrame, serie_anterior: Optional[pd.DataFrame],
+                      tol_abs: float = 1e-6, tol_rel: float = 1e-9) -> pd.Series:
+    """Compara `serie_atual` (oficial OU provisional de UMA vintage, com
+    `reference_period`) contra `serie_anterior` - a uniao (oficial +
+    provisional) da vintage IMEDIATAMENTE anterior, ou None na primeira
+    vintage (tudo False nesse caso).
+
+    Regra (decisao Level 3 aprovada, secao "REVISED"):
+      - `reference_period` nao existia na vintage anterior -> False (mes
+        novo, nao e uma revisao);
+      - existia e `preco_domestico_rs_t`/`ppi_rs_t`/`ipia_hrc_v2`
+        (`math.isclose`, tolerante a ruido de ponto flutuante) E
+        `publication_status` (igualdade exata de string) permanecem
+        iguais -> False;
+      - existia e qualquer um desses quatro campos mudou -> True
+        (inclui promocao PROVISIONAL -> EXPERIMENTAL/PUBLICATION_GRADE,
+        que sempre muda publication_status).
+
+    NUNCA compara `data_vintage`/`source_vintage_id` - mudar so o
+    identificador de execucao nunca conta como revisao (exigencia
+    explicita da decisao aprovada).
+    """
+    if serie_anterior is None or serie_anterior.empty:
+        return pd.Series(False, index=serie_atual.index)
+
+    anterior_por_mes = (serie_anterior.drop_duplicates("reference_period", keep="last")
+                        .set_index("reference_period"))
+    revisado = pd.Series(False, index=serie_atual.index)
+    for i, linha in serie_atual.iterrows():
+        rp = linha["reference_period"]
+        if rp not in anterior_por_mes.index:
+            continue  # mes novo -> False (ja e o default)
+        anterior = anterior_por_mes.loc[rp]
+        if linha["publication_status"] != anterior["publication_status"]:
+            revisado.loc[i] = True
+            continue
+        for col in _COLS_REVISED_NUMERICAS:
+            va, vb = linha[col], anterior[col]
+            a_nan, b_nan = pd.isna(va), pd.isna(vb)
+            if a_nan and b_nan:
+                continue
+            if a_nan != b_nan or not math.isclose(float(va), float(vb), rel_tol=tol_rel, abs_tol=tol_abs):
+                revisado.loc[i] = True
+                break
+    return revisado
+
+
+def preparar_series_para_vintage(oficial: pd.DataFrame, provisional: pd.DataFrame, vintage_id: str,
+                                  vintage_anterior: Optional[dict] = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Anexa `data_vintage`/`source_vintage_id`/`methodology_version`/
+    `revised` a `oficial`/`provisional` (saida de
+    `separar_ipia_hrc_v2_oficial_provisional`), deixando-as prontas para
+    persistir como uma vintage. Funcao PURA - nao grava nada em disco (a
+    escrita fica em `salvar_vintage_ipia_hrc_v2`).
+
+    `source_vintage_id` usa o proprio `vintage_id` - a decisao aprovada
+    permite isso explicitamente ("pode ser igual ao vintage_id se isso
+    simplificar"): cada vintage desta stage sempre recalcula os inputs do
+    zero numa unica execucao, entao publication vintage e source vintage
+    coincidem; reaproveitar um bundle de inputs entre duas publication
+    vintages diferentes exigiria distinguir os dois - fora de escopo aqui.
+
+    `methodology_version` reusa `VERSAO_METODOLOGIA` (mecanismo ja
+    existente no projeto) - este batch nao muda a formula economica do
+    IPIA, entao nenhum bump acontece so por adicionar persistencia.
+
+    `vintage_anterior` (dict no formato de `carregar_vintage_ipia_hrc_v2`,
+    ou None na primeira vintage) fornece a base de comparacao para
+    `revised` - a UNIAO de `official`+`provisional` da vintage
+    imediatamente anterior, nunca so o mesmo arquivo: um mes provisional
+    promovido a oficial precisa ser comparado contra onde ele estava
+    antes (provisional.csv da vintage anterior), nao contra um
+    official.csv anterior que nunca o continha.
+    """
+    serie_anterior_combinada = None
+    if vintage_anterior is not None:
+        serie_anterior_combinada = pd.concat(
+            [vintage_anterior["official"], vintage_anterior["provisional"]], ignore_index=True)
+
+    def _preparar(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df["data_vintage"] = vintage_id
+        df["source_vintage_id"] = vintage_id
+        df["methodology_version"] = VERSAO_METODOLOGIA
+        df["revised"] = calcular_revised(df, serie_anterior_combinada).to_numpy()
+        return df
+
+    return _preparar(oficial), _preparar(provisional)
+
+
+def _iso_data_ou_none(ts) -> Optional[str]:
+    if ts is None or pd.isna(ts):
+        return None
+    return pd.Timestamp(ts).strftime("%Y-%m-%d")
+
+
+def _montar_manifest_extra_ipia_hrc_v2(serie: pd.DataFrame, oficial: pd.DataFrame, provisional: pd.DataFrame,
+                                        criado_em_utc: pd.Timestamp, previous_vintage_id: Optional[str],
+                                        sources_fetch_at_utc: Optional[dict] = None) -> dict:
+    """Monta os campos do manifest ESPECIFICOS do IPIA-HRC V2 (`vintage_id`/
+    `files`/`hashes` sao automaticos, adicionados por
+    `vintage_store.criar_vintage`). Funcao PURA - nenhum I/O.
+
+    `sources_fetch_at_utc` (opcional, dict com `pia_fetch_at_utc`/
+    `ipp_fetch_at_utc`/`comex_fetch_at_utc`/`bcb_fetch_at_utc`) e
+    capturado pelo CHAMADOR (o script de orquestracao, unico lugar que
+    efetivamente consulta essas fontes) no momento de cada chamada de
+    rede - "quando esta execucao consultou a fonte", nunca uma data de
+    publicacao da fonte em si (que este projeto nao inventa quando a
+    fonte nao a expoe). Quando None/ausente, os campos ficam None -
+    nunca um timestamp fabricado."""
+    sources_fetch_at_utc = sources_fetch_at_utc or {}
+    last_pia_year = None
+    if not serie.empty and serie["last_pia_year"].notna().any():
+        last_pia_year = int(serie["last_pia_year"].dropna().iloc[0])
+    contagem = serie["publication_status"].value_counts() if not serie.empty else pd.Series(dtype=int)
+    return {
+        "created_at_utc": criado_em_utc.isoformat(),
+        "previous_vintage_id": previous_vintage_id,
+        "methodology_version": VERSAO_METODOLOGIA,
+        "series": {"official": "official.csv", "provisional": "provisional.csv"},
+        "coverage": {
+            "official_first_period": _iso_data_ou_none(oficial["reference_period"].min() if not oficial.empty else None),
+            "official_last_period": _iso_data_ou_none(oficial["reference_period"].max() if not oficial.empty else None),
+            "provisional_first_period": _iso_data_ou_none(
+                provisional["reference_period"].min() if not provisional.empty else None),
+            "provisional_last_period": _iso_data_ou_none(
+                provisional["reference_period"].max() if not provisional.empty else None),
+        },
+        "counts": {
+            "experimental": int(contagem.get(STATUS_EXPERIMENTAL, 0)),
+            "publication_grade": int(contagem.get(STATUS_PUBLICATION_GRADE, 0)),
+            "provisional": int(contagem.get(STATUS_PROVISIONAL, 0)),
+            "unknown_complete_series": int(contagem.get(STATUS_UNKNOWN, 0)),
+        },
+        "sources": {
+            "pia_last_observed_year": last_pia_year,
+            "pia_fetch_at_utc": sources_fetch_at_utc.get("pia_fetch_at_utc"),
+            "ipp_fetch_at_utc": sources_fetch_at_utc.get("ipp_fetch_at_utc"),
+            "comex_fetch_at_utc": sources_fetch_at_utc.get("comex_fetch_at_utc"),
+            "bcb_fetch_at_utc": sources_fetch_at_utc.get("bcb_fetch_at_utc"),
+        },
+    }
+
+
+def salvar_vintage_ipia_hrc_v2(serie: pd.DataFrame, import_side_df: pd.DataFrame, domestic_price_df: pd.DataFrame,
+                                vintage_anterior: Optional[dict] = None,
+                                base_dir: str = VINTAGE_BASE_DIR_PADRAO,
+                                vintage_id: Optional[str] = None,
+                                sources_fetch_at_utc: Optional[dict] = None) -> dict:
+    """Separa `serie` (saida completa de `calcular_ipia_hrc_v2_pia`) em
+    oficial/provisional, anexa os metadados de vintage
+    (`preparar_series_para_vintage`), monta o manifest
+    (`_montar_manifest_extra_ipia_hrc_v2`) e persiste tudo atomicamente
+    (`vintage_store.criar_vintage`).
+
+    `import_side_df`/`domestic_price_df` sao os INPUTS PROCESSADOS
+    efetivamente usados no calculo - exatamente o que foi passado como
+    `ppi_mensal_df`/`pia_domestico_df` para `calcular_ipia_hrc_v2_pia` ao
+    produzir `serie` (responsabilidade do chamador manter essa
+    correspondencia - ver `scripts/gerar_ipia_hrc_v2_pia.py`). Isso
+    permite reproduzir o calculo economico da vintage sem depender de uma
+    nova chamada as APIs externas - NAO e uma promessa de reconstruir o
+    estado historico dessas APIs caso elas revisem seus proprios dados
+    (ver `docs/METODOLOGIA.md`).
+
+    Unica funcao deste bloco que faz I/O de disco (delegado a
+    `vintage_store`) - as demais funcoes deste bloco sao puras. O
+    congelamento do OFFICIAL (`congelado_df` de `calcular_ipia_hrc_v2_pia`)
+    e responsabilidade de QUEM CHAMA esta funcao (o script de
+    orquestracao), nao dela - `serie` ja deve chegar aqui calculada com o
+    `congelado_df` correto aplicado, mesma decisao ja documentada em
+    `calcular_ipia_hrc_v2_pia` (congelamento nunca escondido numa funcao
+    de baixo nivel).
+
+    `vintage_id`: injecao explicita para testes deterministicos (mesmo
+    padrao do resto do modulo); se None, gera um novo via
+    `vintage_store.novo_vintage_id()`.
+
+    Retorna o manifest persistido (dict, com `vintage_id`/`files`/
+    `hashes` ja preenchidos por `vintage_store.criar_vintage`).
+    """
+    vintage_id = vintage_id or vintage_store.novo_vintage_id()
+    criado_em_utc = vintage_store.timestamp_de_vintage_id(vintage_id)
+    previous_vintage_id = vintage_anterior["manifest"]["vintage_id"] if vintage_anterior is not None else None
+
+    oficial, provisional = separar_ipia_hrc_v2_oficial_provisional(serie)
+    oficial, provisional = preparar_series_para_vintage(oficial, provisional, vintage_id, vintage_anterior)
+
+    manifest_extra = _montar_manifest_extra_ipia_hrc_v2(
+        serie, oficial, provisional, criado_em_utc, previous_vintage_id, sources_fetch_at_utc)
+
+    arquivos = {"official": oficial, "provisional": provisional,
+                "import_side": import_side_df, "domestic_price": domestic_price_df}
+    index_extra = {
+        "created_at_utc": criado_em_utc.isoformat(),
+        "methodology_version": VERSAO_METODOLOGIA,
+        "last_pia_year": manifest_extra["sources"]["pia_last_observed_year"],
+        "official_first_period": manifest_extra["coverage"]["official_first_period"],
+        "official_last_period": manifest_extra["coverage"]["official_last_period"],
+        "provisional_first_period": manifest_extra["coverage"]["provisional_first_period"],
+        "provisional_last_period": manifest_extra["coverage"]["provisional_last_period"],
+    }
+    return vintage_store.criar_vintage(base_dir, VINTAGE_PRODUTO_IPIA_HRC_V2, vintage_id,
+                                       arquivos, manifest_extra, index_extra)
+
+
+_COLS_VINTAGE_TEXTO = ("data_vintage", "source_vintage_id", "methodology_version")
+
+
+def carregar_vintage_ipia_hrc_v2(vintage_id: str, base_dir: str = VINTAGE_BASE_DIR_PADRAO) -> dict:
+    """Carrega manifest + official/provisional/import_side/domestic_price
+    de uma vintage ja persistida (`vintage_store.carregar_vintage`, que
+    nao conhece o schema do IPIA-HRC V2).
+
+    Forca `_COLS_VINTAGE_TEXTO` de volta a string apos o round-trip por
+    CSV: `methodology_version` (ex. `"1.2"`) e um valor que PARECE
+    numerico para o inferenciador de dtype do pandas - sem isso, viraria
+    `float 1.2` na leitura (e uma futura versao como `"1.10"` perderia o
+    zero a direita silenciosamente). `vintage_id`/`data_vintage` ja nao
+    sofrem isso hoje (contem letras, ex. `20260101T000000Z`), mas ficam na
+    lista por seguranca - sao identificadores, nunca numeros."""
+    dados = vintage_store.carregar_vintage(base_dir, VINTAGE_PRODUTO_IPIA_HRC_V2, vintage_id)
+    for chave in ("official", "provisional"):
+        if chave not in dados:
+            continue
+        for col in _COLS_VINTAGE_TEXTO:
+            if col in dados[chave].columns:
+                dados[chave][col] = dados[chave][col].astype(str)
+    return dados
+
+
+def listar_vintages_ipia_hrc_v2(base_dir: str = VINTAGE_BASE_DIR_PADRAO) -> List[str]:
+    """Vintage IDs do IPIA-HRC V2 em ordem cronologica."""
+    return vintage_store.listar_vintages(base_dir, VINTAGE_PRODUTO_IPIA_HRC_V2)
+
+
+def ultima_vintage_ipia_hrc_v2(base_dir: str = VINTAGE_BASE_DIR_PADRAO) -> Optional[str]:
+    """Vintage mais recente do IPIA-HRC V2, ou None se ainda nao existe
+    nenhuma (primeira execucao - sem congelado_df)."""
+    return vintage_store.ultima_vintage(base_dir, VINTAGE_PRODUTO_IPIA_HRC_V2)
 
 
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,

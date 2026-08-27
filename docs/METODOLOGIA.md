@@ -894,11 +894,12 @@ nesta stage — mesmo status dos demais caminhos V2.
   mudança metodológica deliberada (ex. trocar o benchmark ou o método de
   encadeamento). Qualquer uma delas exigiria decisão explícita de
   reabrir/reprocessar meses congelados — fora do fluxo normal.
-- **Nenhuma infraestrutura de vintage/persistência foi implementada** —
-  `congelado_df` é injetado pelo chamador (ex. um script de orquestração
-  que lê o CSV OFFICIAL anterior antes de rodar de novo); não há
-  armazenamento de vintages históricos automatizado. O valor corrente do
-  IPIA é sempre mostrado como PROVISIONAL, nunca como definitivo.
+- **Nenhuma infraestrutura de vintage/persistência foi implementada nesta
+  stage** (E11) — `congelado_df` era injetado manualmente pelo chamador.
+  A persistência append-only real (armazenamento local automatizado de
+  cada execução como uma vintage imutável) foi implementada na stage
+  seguinte — ver §12.12 (Stage G2/ADR 0012). O valor corrente do IPIA
+  continua sempre mostrado como PROVISIONAL, nunca como definitivo.
 - **Execução real** (`scripts/gerar_ipia_hrc_v2_pia.py`,
   `data/processed/ipia_hrc_v2_official.csv`,
   `data/processed/ipia_hrc_v2_provisional.csv`): OFFICIAL cobre 2019-02 a
@@ -915,6 +916,127 @@ nesta stage — mesmo status dos demais caminhos V2.
   explicação estrutural dominante do gap, não o import side, que é
   idêntico nos dois caminhos). Nenhum ajuste foi aplicado a partir dessa
   comparação — é validação, não calibração.
+
+## 12.12 IPIA-HRC V2 — vintages de publicação append-only (Stage G2, ADR 0012)
+
+Decisão Level 3 aprovada: camada mínima, local e auditável de vintages de
+publicação para o IPIA-HRC V2 PIA-based (§12.11). Mecânica genérica
+(gerar ID, escrever atomicamente, hashear, indexar, carregar, listar) em
+`steel_indicator/storage/vintage_store.py` — reutilizável pelos demais
+produtos do repositório (IPIA-Vergalhão, ICCS, ICS); integração econômica
+específica do IPIA-HRC V2 (`calcular_revised`, `preparar_series_para_
+vintage`, `salvar_vintage_ipia_hrc_v2`, `carregar_vintage_ipia_hrc_v2`,
+`listar_vintages_ipia_hrc_v2`, `ultima_vintage_ipia_hrc_v2`) em
+`src/indices_setoriais.py`. Sem banco, sem cloud, sem API — só filesystem
+local (`data/processed/vintages/ipia_hrc_v2/<vintage_id>/`), sempre
+`.gitignore`d (o mesmo padrão `data/processed/*` já cobre o diretório
+novo).
+
+- **`reference_period` ≠ `data_vintage`**: `reference_period` é o mês
+  econômico descrito; `data_vintage` é quando aquela VERSÃO do resultado
+  foi produzida. Uma observação com o mesmo `reference_period` pode
+  existir em vintages diferentes (ex.: 2024-06 como `PROVISIONAL` numa
+  vintage, depois `PUBLICATION_GRADE` com valor diferente numa vintage
+  posterior) — as duas permanecem recuperáveis, nenhuma sobrescreve a
+  outra.
+- **Vintage ID**: formato `YYYYMMDDTHHMMSSZ`, sempre UTC, ordenável
+  lexicograficamente = cronologicamente, sem `:` (seguro no Windows).
+  Colisão (duas vintages pedindo o mesmo segundo) nunca é resolvida
+  silenciosamente — `criar_vintage()` levanta `FileExistsError`.
+  Injeção explícita de `vintage_id` é suportada para testes
+  determinísticos.
+- **Imutabilidade**: uma vintage criada nunca é sobrescrita
+  (`vintage_store.criar_vintage`). Escrita atômica — tudo montado num
+  diretório temporário dentro do próprio `<base_dir>/<produto>/` e só
+  então renomeado (`os.rename`) para o `vintage_id` final; uma falha
+  antes do rename nunca deixa uma vintage parcial visível, e o
+  `index.csv` só é atualizado depois do rename bem-sucedido. Sem
+  locking distribuído — execução local/single-process nesta stage, por
+  decisão explícita.
+- **Manifest** (`manifest.json`, um por vintage): `vintage_id`,
+  `created_at_utc` (derivado do próprio `vintage_id` — única fonte de
+  verdade do instante de criação), `previous_vintage_id`,
+  `methodology_version` (reaproveita `VERSAO_METODOLOGIA`, mecanismo já
+  existente — nenhum segundo sistema de versionamento; este batch não
+  muda a fórmula econômica do IPIA, então nenhum bump acontece só por
+  adicionar persistência), `series`/`coverage`/`counts` (contagem por
+  `publication_status`, incluindo `unknown_complete_series`),
+  `sources` (`pia_last_observed_year` + `*_fetch_at_utc` — "quando esta
+  execução consultou a fonte", nunca uma data de publicação da fonte
+  inventada quando ela não a expõe), `files` e `hashes` (SHA256 de cada
+  arquivo persistido, verificado contra o arquivo real ao vivo nesta
+  stage).
+- **Input snapshots**: cada vintage persiste `import_side.csv`
+  (resultado usado do agregador bottom-up multi-NCM,
+  `agregar_ipia_hrc_multi_ncm_mensal`) e `domestic_price.csv` (resultado
+  usado de `preco_domestico_hrc_pia_v2()`) — os INPUTS PROCESSADOS que
+  produziram aquela vintage, suficientes para reproduzir o cálculo
+  econômico sem nova chamada às APIs externas. **Reproduzir uma vintage
+  do IPIA ≠ reconstruir o estado histórico das APIs externas**: se
+  Comex Stat/BCB/IBGE revisarem seus próprios dados depois da coleta,
+  este mecanismo não pretende recuperar o valor que a API tinha
+  naquele instante — só o que o IPIA calculou/publicou com o que foi
+  de fato processado. Não são persistidos: respostas brutas do Comex,
+  PDFs, payloads HTTP completos, cache de API — deliberadamente fora de
+  escopo (não é um data lake).
+- **`data_vintage`/`source_vintage_id`/`methodology_version`/`revised`**
+  em toda linha de `official.csv`/`provisional.csv`
+  (`preparar_series_para_vintage`). `source_vintage_id` usa o próprio
+  `vintage_id` (decisão aprovada permite explicitamente) — cada vintage
+  desta stage sempre recalcula os inputs do zero numa única execução,
+  então publication vintage e source vintage coincidem.
+- **`revised`**: comparação contra a vintage IMEDIATAMENTE anterior
+  (`calcular_revised`) — compara `preco_domestico_rs_t`/`ppi_rs_t`/
+  `ipia_hrc_v2` (`math.isclose`, tolerante a ruído de ponto flutuante) e
+  `publication_status` (igualdade exata) contra a UNIÃO
+  official+provisional da vintage anterior (nunca só o mesmo arquivo —
+  um mês promovido de provisional a oficial precisa ser comparado
+  contra onde estava antes). Mês novo → `False`; inalterado → `False`;
+  mudou → `True`. Nunca compara `data_vintage`/`source_vintage_id` —
+  mudar só o identificador de execução nunca conta como revisão.
+- **Official freeze no fluxo normal**: `scripts/gerar_ipia_hrc_v2_pia.py`
+  detecta a última vintage (`ultima_vintage_ipia_hrc_v2`), carrega o
+  `official.csv` dela (`carregar_vintage_ipia_hrc_v2`) e passa como
+  `congelado_df` para `calcular_ipia_hrc_v2_pia()` — decisão tomada no
+  SCRIPT de orquestração, nunca escondida numa função econômica de
+  baixo nível (mesmo princípio já registrado no §12.11 para
+  `congelado_df`). Primeira vintage: sem `previous_vintage_id`, sem
+  `congelado_df`.
+- **Provisional permanece revisável**: uma nova execução pode alterar
+  valores provisórios existentes, adicionar novos meses, ou promover
+  meses provisórios a oficiais quando uma nova PIA cobrir aquele ano —
+  testado explicitamente
+  (`tests/unit/test_ipia_hrc_v2_vintages.py::
+  test_promocao_provisional_para_official_apos_nova_pia`, simulando
+  Vintage A com 2023-12 oficial + 2024 provisório, depois Vintage B com
+  2024 promovido a oficial via `EXPERIMENTAL`/`PUBLICATION_GRADE`
+  conforme `import_status`, confirmando que a Vintage A nunca muda —
+  byte a byte).
+- **Duas exceções futuras ao congelamento, NÃO implementadas**: (a)
+  correção/revisão oficial da fonte IBGE; (b) mudança metodológica
+  deliberada. A arquitetura não as torna impossíveis (qualquer uma
+  geraria uma NOVA vintage, nunca alteraria uma antiga), mas nenhuma
+  das duas foi implementada nesta stage.
+- **Execução real** (primeira vintage local,
+  `data/processed/vintages/ipia_hrc_v2/`): vintage `20260827T150423Z`,
+  `previous_vintage_id=None`, `methodology_version=1.2`,
+  `last_pia_year=2023`. OFFICIAL e PROVISIONAL idênticos aos números já
+  registrados no §12.11 (mesma execução, agora também persistida como
+  vintage). Os 4 hashes SHA256 do manifest conferem contra os arquivos
+  reais no disco. Recarregar a vintage
+  (`carregar_vintage_ipia_hrc_v2`) e recalcular usando só
+  `import_side.csv`+`domestic_price.csv` reproduz `official.csv`+
+  `provisional.csv` numericamente (dentro de `rtol=1e-9`) — confirmado
+  ao vivo nesta stage.
+- Implementado em `steel_indicator/storage/vintage_store.py` (genérico)
+  e `src/indices_setoriais.py` (`calcular_revised`,
+  `preparar_series_para_vintage`, `salvar_vintage_ipia_hrc_v2`,
+  `carregar_vintage_ipia_hrc_v2`, `listar_vintages_ipia_hrc_v2`,
+  `ultima_vintage_ipia_hrc_v2`). Não conectado a `--selftest`/CLI/
+  relatório oficial nesta stage — mesmo status dos demais caminhos V2.
+  Migração futura para object storage/banco é possível (o layout
+  `<produto>/<vintage_id>/` + manifest não impede isso), mas não
+  implementada agora.
 
 ---
 
