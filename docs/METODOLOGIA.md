@@ -1082,8 +1082,13 @@ novo).
   `ultima_vintage_ipia_hrc_v2`). **Conectado à CLI a partir do Stage G5**
   (`python src/indices_setoriais.py --ipia` publica; `--ipia-latest` lê a
   última vintage sem rede) via a orquestração canônica
-  `executar_pipeline_ipia_hrc()` — não conectado ao relatório PDF ainda
-  (fora de escopo do Stage G5; `--pdf-ipia` continua no caminho legado).
+  `executar_pipeline_ipia_hrc()`. **Conectado ao relatório PDF a partir do
+  Stage G6**: `--pdf-ipia` carrega a última vintage já publicada
+  (`carregar_vintage_ipia_hrc_v2`) e gera o relatório V2 inteiramente a
+  partir dela (`reporting/report_builder.py::gerar_relatorio_ipia_hrc`) —
+  sem rede, sem criar vintage nova; falha com instrução clara se nenhuma
+  vintage existir ainda. O relatório legado (`gerar_relatorio_ipia`)
+  permanece no código, mas não é mais o caminho de `--pdf-ipia`.
   Migração futura para object storage/banco é possível (o layout
   `<produto>/<vintage_id>/` + manifest não impede isso), mas não
   implementada agora.
@@ -1210,8 +1215,15 @@ de baixa liquidez — ver ADR 0013).
 
 **Atualização (Stage G5):** o wiring de CLI (`--ipia`/`--ipia-latest`) foi
 implementado — ver §12.12 acima e a orquestração canônica
-`executar_pipeline_ipia_hrc()`. O wiring do relatório PDF permanece fora
-de escopo (decisão separada, ainda não feita).
+`executar_pipeline_ipia_hrc()`.
+
+**Atualização (Stage G6):** o wiring do relatório PDF (`--pdf-ipia`) foi
+implementado — ver §12.12 acima. O relatório V2 é gerado inteiramente a
+partir da vintage persistida (nunca recoleta/recalcula), audita e remove
+do caminho publicado os indicadores auxiliares legados que dependeriam de
+rede (origem por país, penetração de importação via Aço Brasil — ver
+§15.4) e mantém o benchmark corporativo (Usiminas+CSN) apenas como
+validação textual, nunca como preço doméstico oficial.
 
 ---
 

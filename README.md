@@ -1,375 +1,131 @@
-# IPIA Brasil
+# Steel Indicator
 
-**Inteligência setorial para medir a competitividade do aço importado no mercado brasileiro.**
+A reproducible, auditable platform for Brazilian steel sector indices — built around versioned methodology, immutable data vintages and explicit provenance.
 
-O **IPIA Brasil** é um projeto de research quantitativo que transforma dados públicos de comércio exterior, câmbio, preços industriais e informações divulgadas por siderúrgicas em indicadores sobre o mercado brasileiro de aço.
+## What it does
 
-O principal indicador desenvolvido é o **IPIA — Índice de Paridade de Importação do Aço**, atualmente aplicado à **bobina laminada a quente (HRC — Hot-Rolled Coil)**.
+Steel Indicator turns public trade, price and industrial-production data into sector indices for the Brazilian steel market. The first index shipped end-to-end is **IPIA-HRC** — the Import Parity Index for Hot-Rolled Coil. Every published number can be traced back to the source observation, the historical policy parameter, the methodology version and the exact data vintage that produced it.
 
-A pergunta central é simples:
+## Why it exists
 
-> **Quanto custa trazer aço importado para o Brasil e como esse custo se compara ao preço praticado no mercado doméstico?**
+Brazil has no public, product-specific, reproducible index comparing the cost of importing steel to the price charged domestically. Company disclosures, trade data and industrial statistics exist separately, each with its own gaps, revisions and proxies. This project assembles them into one auditable pipeline instead of a one-off spreadsheet: every transformation — interpolation, proxy substitution, temporal chaining — is labeled, versioned and testable, never silently applied.
 
-O projeto implementa o pipeline completo:
-
-**fontes públicas → tratamento e validação → cálculo econômico → indicadores → relatório setorial em PDF**
-
----
-
-## O que é o IPIA
-
-O IPIA compara o preço doméstico do aço com o custo econômico estimado de importar o mesmo produto e colocá-lo no mercado brasileiro.
-
-A fórmula principal é:
+## IPIA-HRC
 
 ```text
-IPIA = (Preço doméstico em R$/t / Custo de importação posto no cliente em R$/t) × 100
+IPIA-HRC = Domestic Price (R$/t) / Import Parity Price (R$/t) × 100
 ```
 
-Interpretação:
-
-| IPIA | Leitura |
+| IPIA-HRC | Reading |
 |---|---|
-| **> 100** | O preço doméstico está acima da paridade de importação. A importação tende a ficar mais competitiva. |
-| **= 100** | Preço doméstico e custo de importação estão em paridade. |
-| **< 100** | O preço doméstico está abaixo da paridade. O produtor local possui maior proteção frente ao produto importado. |
+| **> 100** | Domestic price is above import parity — importing would have been cheaper. |
+| **= 100** | Domestic price and import parity coincide. |
+| **< 100** | Domestic price is below import parity — the local producer has a competitive cushion. |
 
-O objetivo não é apenas acompanhar preços, mas decompor **quais fatores estão alterando a competitividade relativa do aço importado**, como câmbio, preço internacional, frete, impostos e custos de internação.
+## Current methodology
 
----
+Full detail lives in [`docs/METODOLOGIA.md`](docs/METODOLOGIA.md). Summary of the currently published (V2) path:
 
-## O que o projeto entrega
+**Import side** — realized Comex Stat trade data, month × NCM × country of origin:
+- 13 NCMs of non-alloy hot-rolled coil, width ≥ 600 mm;
+- historical import tariff (II) and AFRMM by validity period, never today's rate applied retroactively;
+- antidumping/quota windows resolved per NCM and date;
+- BCB SGS exchange rate (date-bounded retrieval, never `/ultimos/N`);
+- observed freight and insurance where available, CIF build-up;
+- port/logistics costs and importer margin to a landed cost per tonne (PPI).
 
-Atualmente o repositório implementa de ponta a ponta:
+**Domestic side** — PIA-Produto (IBGE/SIDRA, table 7752, category 2422.2020) as the annual benchmark, distributed to a monthly series by the movement of IPP 242-Siderurgia via **Proportional Denton** (first-differences, constrained so the annual mean matches the PIA level). Declared PROXY on two independent grounds: PIA mixes domestic-market and export destinations (`DESTINATION_MIX`), and IPP 242 is a sector-wide index, not HRC-specific (`PRODUCT_AGGREGATION`). A Usiminas+CSN corporate-disclosure anchor (the V1 approach) remains as an independent validation benchmark, never used to calibrate the PIA-based series.
 
-### IPIA — Paridade de Importação
+**Low liquidity** — no volume threshold. `total_kg` is published as observed; nothing is smoothed, interpolated or excluded based on import volume. A disclosure statement covers the limitation instead (`docs/METODOLOGIA.md` §11.1) — see [ADR 0013](docs/adr/0013-ipia-hrc-publication-contract.md) for why a threshold was considered and rejected.
 
-Série mensal comparando:
+## Publication contract
 
-- preço doméstico do aço;
-- preço FOB de importação;
-- frete internacional;
-- seguro;
-- câmbio;
-- Imposto de Importação;
-- AFRMM;
-- despesas portuárias;
-- frete interno;
-- margem do importador;
-- custo total de importação posto no cliente.
+Every published month carries a `publication_status`:
 
-### Pressão das importações
-
-O projeto também acompanha indicadores complementares, como:
-
-- taxa de penetração das importações;
-- evolução histórica da paridade;
-- composição do custo de importação;
-- origem geográfica das importações;
-- participação dos principais países fornecedores;
-- câmbio;
-- evolução do preço doméstico e do custo importado.
-
-Esses indicadores ajudam a distinguir, por exemplo, se o aumento da pressão competitiva decorre de:
-
-- queda do preço internacional;
-- valorização do real;
-- redução do frete;
-- mudança na origem das importações;
-- crescimento da participação do aço estrangeiro;
-- ou aumento do preço doméstico.
-
----
-
-## Relatório setorial
-
-O projeto possui uma camada própria de geração de relatórios em PDF:
-
-```text
-src/reporting/
-├── theme.py
-├── components.py
-├── pages.py
-└── report_builder.py
-```
-
-O comando:
-
-```bash
-python src/indices_setoriais.py --pdf-ipia
-```
-
-gera:
-
-```text
-data/processed/ipia_relatorio.pdf
-```
-
-O relatório possui quatro páginas:
-
-1. **Visão executiva**
-   - nível atual do IPIA;
-   - leitura do cenário;
-   - principais movimentos do período;
-   - informações metodológicas.
-
-2. **Decomposição do custo de importação**
-   - preço internacional;
-   - câmbio;
-   - impostos;
-   - logística;
-   - custo final posto no cliente;
-   - spread frente ao preço doméstico.
-
-3. **Séries temporais**
-   - evolução do IPIA;
-   - penetração das importações;
-   - câmbio;
-   - principais KPIs.
-
-4. **Indicadores e origem das importações**
-   - países fornecedores;
-   - participação relativa;
-   - indicadores recentes;
-   - tabela de acompanhamento.
-
-O design utiliza uma identidade visual própria e uma estrutura editorial voltada para relatórios de research econômico e setorial.
-
----
-
-## Fontes de dados
-
-O IPIA procura utilizar prioritariamente dados públicos e reproduzíveis.
-
-| Informação | Fonte |
+| Status | Meaning |
 |---|---|
-| Importações brasileiras de aço | Comex Stat / MDIC |
-| Preço FOB, frete e seguro | Comex Stat |
-| Câmbio | Banco Central do Brasil — SGS |
-| IPP de Metalurgia | IBGE / SIDRA |
-| Preço doméstico | Releases públicos de siderúrgicas |
-| Volume doméstico | Releases públicos de siderúrgicas |
-| Penetração das importações | Instituto Aço Brasil |
+| **PUBLICATION_GRADE** | Full historical trade-policy coverage validated for the month. |
+| **EXPERIMENTAL** | Published, but with known/quantified trade-policy coverage gaps. |
+| **PROVISIONAL** | Current extension beyond the last confirmed PIA-Produto benchmark year — revisable when IBGE publishes the next annual PIA. |
+| **UNKNOWN** | Not publishable for that month — never appears in official or provisional output, and is never interpolated to fill the gap. |
 
-O escopo atual de HRC utiliza **13 NCMs de bobina laminada a quente não ligada, com largura ≥ 600 mm**, definidos a partir do escopo utilizado na investigação brasileira de defesa comercial para laminados a quente.
+Public series names: **IPIA-HRC Official** (PUBLICATION_GRADE + EXPERIMENTAL history), **IPIA-HRC Provisional** (current extension), and **IPIA-HRC Corporate Benchmark** (the Usiminas+CSN anchor) — internal/deprecated, never presented as equivalent to the official series.
 
----
+## Current validated coverage
 
-## Preço doméstico
-
-Uma das principais dificuldades metodológicas é que não existe uma API pública com preço mensal de HRC no mercado brasileiro.
-
-Além disso, as siderúrgicas brasileiras analisadas não divulgam separadamente preço e volume específicos de bobina laminada a quente em seus releases trimestrais.
-
-Por isso, o projeto utiliza atualmente dados públicos de **Usiminas e CSN** como uma proxy do mercado doméstico.
-
-O processo é:
+Coverage windows and the current value change with every publication run — treat any specific number below as a **validated vintage example**, not a live figure:
 
 ```text
-Releases trimestrais
-        ↓
-Preço médio por empresa
-        ↓
-Média ponderada pelo volume vendido
-        ↓
-Âncora trimestral de preço doméstico
-        ↓
-Encadeamento mensal via IPP / IBGE
-        ↓
-Série mensal utilizada pelo IPIA
+vintage 20260827T202855Z
+OFFICIAL:     2019-02 → 2023-12  (27 EXPERIMENTAL + 21 PUBLICATION_GRADE)
+PROVISIONAL:  2024-01 → 2026-06  (latest: 126.74)
 ```
 
-Essa limitação não é escondida.
+Run `python src/indices_setoriais.py --ipia-latest` for the coverage and value of the vintage actually persisted in your checkout.
 
-Cada observação carrega metadados indicando se o valor é observado, calculado, estimado ou baseado em proxy.
+## Vintage / reproducibility
 
----
+Every `--ipia` run persists an **immutable, append-only vintage** under `data/processed/vintages/ipia_hrc_v2/<vintage_id>/`, where `vintage_id` is a UTC timestamp (e.g. `20260827T202855Z`). A vintage's manifest records:
 
-## Governança e proveniência dos dados
+- `reference_period` — the month a given observation actually describes;
+- `vintage_id` / `created_at_utc` — when this publication was produced;
+- `previous_vintage_id` — chains vintages so revision history is traceable;
+- `methodology_version` — the `VERSAO_METODOLOGIA` that produced this vintage;
+- per-source fetch timestamps (Comex, BCB, IBGE) — what each source looked like when collected;
+- SHA-256 hashes of every persisted CSV.
 
-Uma preocupação central do projeto é separar claramente **dado observado de transformação analítica**.
+Earlier vintages are never overwritten or mutated; a later run only appends a new one. `--ipia-latest` and `--pdf-ipia` always read the most recent vintage with no network access and never create a new one.
 
-Os números utilizados no relatório são classificados segundo sua proveniência:
-
-```text
-OBSERVADO
-CALCULADO
-ESTIMADO
-```
-
-Além disso, um indicador pode receber a marcação adicional:
+## Architecture
 
 ```text
-PROXY
-```
-
-Por exemplo, o preço doméstico atual pode ser:
-
-```text
-CALCULADO · PROXY
-```
-
-porque combina dados observados das empresas, agregação ponderada e uma aproximação do mercado de HRC por meio de informações do segmento de siderurgia.
-
-Cada indicador também possui seu próprio:
-
-```text
-reference_period
-```
-
-evitando tratar como contemporâneos dados que possuem diferentes defasagens de publicação.
-
----
-
-## Tratamento de baixa liquidez
-
-Meses com pouco volume importado podem produzir preços médios pouco representativos.
-
-O projeto utiliza:
-
-```text
-VOLUME_MINIMO_T = 5.000 toneladas/mês
-```
-
-para construir um peso de confiabilidade:
-
-```text
-peso_confiabilidade =
-min(volume_do_mes / volume_minimo, 1)
-```
-
-Meses com volume suficiente permanecem inalterados.
-
-Meses com volume reduzido podem receber suavização seletiva por média móvel de três meses.
-
-O preço bruto continua armazenado separadamente.
-
-O objetivo é evitar que operações pequenas e pouco representativas produzam movimentos artificiais no índice sem eliminar eventos reais de mercado com grande volume.
-
----
-
-## Dados faltantes
-
-O projeto diferencia três situações.
-
-### Importação sem observação no mês
-
-Pode receber interpolação linear e é explicitamente marcada:
-
-```text
-interpolado = True
-peso_confiabilidade = 0
-```
-
-### Importação com volume baixo
-
-Pode receber suavização seletiva:
-
-```text
-suavizado = True
-```
-
-### Preço doméstico entre releases
-
-É encadeado utilizando a evolução do IPP de Metalurgia do IBGE:
-
-```text
-metodo = encadeado_ipp
-```
-
-Caso o IPP mais recente ainda não esteja disponível:
-
-```text
-metodo = hold_flat_fallback
-```
-
-Nenhuma dessas transformações é apresentada como se fosse observação original.
-
----
-
-## Arquitetura
-
-```text
-ipia-brasil/
-│
-├── src/
-│   ├── indices_setoriais.py
-│   │
-│   └── reporting/
-│       ├── __init__.py
-│       ├── components.py
-│       ├── pages.py
-│       ├── report_builder.py
-│       └── theme.py
-│
-├── data/
-│   ├── curated/
-│   │   └── preco_domestico_aco.csv
-│   ├── raw/
-│   └── processed/
-│
-├── docs/
-│   ├── METODOLOGIA.md
-│   ├── report_design_system.md
-│   └── adr/
-│
+steel-indicator/
+├── README.md
 ├── CLAUDE.md
 ├── requirements.txt
-└── README.md
+├── pytest.ini
+├── src/
+│   ├── indices_setoriais.py       # calculation engine, CLI, embedded selftest
+│   ├── steel_indicator/           # extracted package (in-progress migration)
+│   │   ├── domain/                # generic index engine, provenance
+│   │   ├── data/                  # data contracts
+│   │   ├── sources/                # Comex adapter
+│   │   ├── parameters/            # historical trade-policy resolution (II/AFRMM/antidumping)
+│   │   └── storage/                # vintage store, manifest
+│   └── reporting/                 # presentation layer (PDF), consumes calculated results only
+├── scripts/                        # one-off production/research runners (see docs/LEGACY notes below)
+├── tests/
+│   ├── characterization/           # freezes legacy behavior
+│   ├── unit/                       # deterministic, no network
+│   └── integration/                # reserved for live-source contract tests (currently empty)
+├── docs/                           # methodology, ADRs, architecture, data sources, validation
+├── data/
+│   ├── curated/                    # versioned curated inputs (company-disclosure anchor)
+│   ├── raw/                        # gitignored
+│   └── processed/                  # gitignored — CSV outputs + vintage store
+├── references/                     # original research, evidence only
+└── .claude/                        # project rules and agent definitions
 ```
 
-### `src/indices_setoriais.py`
+`src/indices_setoriais.py` is still the orchestration/compatibility surface for the whole engine (CLI, calculation, embedded `selftest()`); `src/steel_indicator/` is the target package structure being extracted from it incrementally (see [`docs/architecture.md`](docs/architecture.md)). Reporting never recollects data or recomputes economics — it consumes the same result objects the CLI/CSV outputs use.
 
-Motor principal do projeto.
+## Data sources
 
-Responsável por:
+| Data | Source |
+|---|---|
+| Brazilian steel imports (value, weight, freight, insurance, origin) | Comex Stat / MDIC (`/general` POST) |
+| Exchange rate | Banco Central do Brasil — SGS |
+| Domestic price benchmark (PIA-Produto) | IBGE / SIDRA table 7752 |
+| Monthly chaining index (IPP 242-Siderurgia) | IBGE / SIDRA |
+| Corporate validation anchor | Usiminas and CSN public quarterly disclosures |
 
-- coletores;
-- transformações;
-- cálculo de paridade;
-- motor genérico de índices;
-- indicadores auxiliares;
-- proveniência;
-- validações;
-- CLI;
-- autotestes.
+Full source registry, verification states and collection rules: [`docs/data-sources.md`](docs/data-sources.md).
 
-### `src/reporting/`
-
-Camada de apresentação.
-
-O cálculo nunca é duplicado dentro do relatório: as páginas consomem os resultados produzidos pelo motor principal.
-
-### `docs/METODOLOGIA.md`
-
-Documentação detalhada da metodologia atual:
-
-- fórmulas;
-- parâmetros;
-- fontes;
-- tratamentos;
-- proxies;
-- limitações;
-- classificação dos dados.
-
-### `docs/adr/`
-
-Registro das principais decisões metodológicas e arquiteturais do projeto.
-
----
-
-## Instalação
-
-Clone o repositório:
+## How to install
 
 ```bash
-git clone https://github.com/mori-mkm/ipia-brasil.git
-cd ipia-brasil
-```
-
-Crie e ative um ambiente virtual:
-
-```bash
+git clone https://github.com/mori-mkm/steel-indicator.git
+cd steel-indicator
 python -m venv .venv
 ```
 
@@ -385,228 +141,82 @@ Linux/macOS:
 source .venv/bin/activate
 ```
 
-Instale as dependências:
-
 ```bash
 pip install -r requirements.txt
 ```
 
-Principais bibliotecas:
+Direct dependencies: pandas, NumPy, Requests, Matplotlib, pdfplumber, xlrd (see `requirements.txt` for why each is needed).
 
-- pandas
-- NumPy
-- Requests
-- Matplotlib
-- pdfplumber
-- xlrd
+## Usage
 
----
+| Command | Network | Creates vintage | Output |
+|---|---|---|---|
+| `--selftest` | no | no | math/provenance self-checks, exit code |
+| `--check-sources` | yes | no | live probe of the public APIs used |
+| `--ipia` | yes | **yes** | publishes IPIA-HRC: fetches sources, calculates, persists a new vintage, writes `data/processed/ipia_hrc_v2_official.csv` + `ipia_hrc_v2_provisional.csv` |
+| `--ipia-latest` | no | no | prints the latest persisted vintage's summary |
+| `--pdf-ipia` | no | no (PDF only) | 4-page IPIA-HRC PDF built from the latest persisted vintage |
 
-## Como executar
+`--ipia-latest` and `--pdf-ipia` fail with an explicit message (never a silent fallback) if no vintage has been published yet. `--ano-ini`/`--ano-fim` do not apply to the IPIA-HRC commands — the publication window is fixed by the approved contract ([ADR 0013](docs/adr/0013-ipia-hrc-publication-contract.md)).
 
-### Validar o motor sem acessar a internet
+## Testing
 
 ```bash
+python -m pytest tests/ -v
 python src/indices_setoriais.py --selftest
 ```
 
-O projeto possui uma suíte de autotestes embutida no próprio motor, cobrindo regras de cálculo, proveniência, suavização, reconciliação entre séries e componentes utilizados no relatório.
+330 automated tests (characterization + unit), plus the embedded engine self-check. No unit or characterization test makes a live network call or writes to `data/processed/`.
 
----
-
-### Validar as fontes públicas
-
-```bash
-python src/indices_setoriais.py --check-sources
-```
-
-Consulta as APIs utilizadas pelo projeto e exibe observações recentes para validação.
-
----
-
-### Consultar preço de importação de HRC
-
-```bash
-python src/indices_setoriais.py --preview-bobina
-```
-
-Gera:
-
-```text
-data/processed/serie_bobina_quente.csv
-```
-
----
-
-### Consultar a série doméstica
-
-```bash
-python src/indices_setoriais.py --preview-domestico
-```
-
-Gera:
-
-```text
-data/processed/serie_domestico_aco.csv
-```
-
----
-
-### Publicar o IPIA-HRC
-
-```bash
-python src/indices_setoriais.py --ipia
-```
-
-Busca as fontes, calcula o IPIA-HRC (PIA-based), separa OFFICIAL/PROVISIONAL,
-persiste uma nova vintage imutável em `data/processed/vintages/ipia_hrc_v2/`
-e atualiza:
-
-```text
-data/processed/ipia_hrc_v2_official.csv
-data/processed/ipia_hrc_v2_provisional.csv
-```
-
-`--ano-ini`/`--ano-fim` não se aplicam a este comando — a janela de fetch e
-a janela de publicação já são fixadas pelo pipeline aprovado (ver
-`docs/adr/0013-ipia-hrc-publication-contract.md`).
-
-Para ver a última publicação já existente sem consultar as fontes de novo
-(sem rede, sem criar vintage nova):
-
-```bash
-python src/indices_setoriais.py --ipia-latest
-```
-
----
-
-### Gerar o relatório
+## Reporting
 
 ```bash
 python src/indices_setoriais.py --pdf-ipia
 ```
 
-Gera:
+generates a 4-page `data/processed/ipia_relatorio.pdf` entirely from the latest published vintage — never re-fetches or recalculates:
 
-```text
-data/processed/ipia_relatorio.pdf
-```
+1. **IPIA-HRC** — executive view: current provisional value (or, if none exists yet, the last confirmed historical value, explicitly labeled as historical, never as current), last-12-months trend, and vintage metadata.
+2. **Paridade de Importação** — import-parity cost series and quality indicators.
+3. **Dinâmica Histórica** — full history by `publication_status`; months without a publishable value render as a real gap, never interpolated or implied adjacent.
+4. **Metodologia, Qualidade e Publicação** — status legend, domestic-proxy disclosure, low-liquidity disclosure, corporate-benchmark validation note, vintage metadata.
 
----
+A separate legacy report path (`gerar_relatorio_ipia`, cost-decomposition + country-of-origin breakdown) still exists in `src/reporting/report_builder.py` but is no longer reachable from `--pdf-ipia`.
 
-## Motor genérico de índices
+## Methodology governance
 
-Além do IPIA, o projeto possui uma infraestrutura genérica para construção de índices compostos.
+- [`docs/METODOLOGIA.md`](docs/METODOLOGIA.md) — official methodology, all products.
+- [`docs/adr/`](docs/adr/) — 13 accepted Architecture Decision Records, including the domestic-price anchor ([0001](docs/adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md)), the PIA-Produto benchmark ([0010](docs/adr/0010-pia-produto-hrc-benchmark-anual-proportional-denton.md)), the official/provisional split ([0011](docs/adr/0011-ipia-hrc-v2-status-provisional-e-series-oficial-provisional.md)), append-only vintages ([0012](docs/adr/0012-ipia-hrc-v2-vintages-append-only.md)), and the publication contract ([0013](docs/adr/0013-ipia-hrc-publication-contract.md)).
+- [`docs/validation/`](docs/validation/) and [`docs/decisions/`](docs/decisions/) — the evidence and readiness analysis behind the V2 publication decision.
+- [`docs/data-sources.md`](docs/data-sources.md) — source-by-source verification status and collection rules.
+- [`docs/architecture.md`](docs/architecture.md) — target software architecture and current migration state.
 
-Ela implementa conceitos como:
+## Project roadmap
 
-- pilares;
-- variáveis;
-- orientação positiva ou negativa;
-- pesos teóricos fixos;
-- janela histórica de referência;
-- z-score;
-- winsorização;
-- cobertura mínima;
-- redistribuição de pesos para dados faltantes;
-- validação exploratória com PCA.
+**DONE:**
+- IPIA-HRC (import-side + PIA-based domestic side, publication contract, vintages, CLI, 4-page report).
 
-A janela histórica utilizada como referência é congelada:
+**NEXT:**
+- IPIA-Rebar — same shared engine, own NCM basket and domestic-price source (not yet implemented);
+- ICCS — sector credit-conditions index (pillar/weight specification exists in `docs/METODOLOGIA.md`; collectors not yet implemented);
+- ICS — synthetic sector-conditions index (not yet started).
 
-```text
-2013-01-01 → 2019-12-31
-```
+## Limitations
 
-Isso evita que a entrada de uma observação nova altere retroativamente toda a escala histórica de um índice.
+- the domestic price is a declared **proxy** (PIA mixes export destinations; IPP 242 is sector-wide, not HRC-specific) — not an observed HRC-specific price;
+- publication-grade history is short (21 months, 2022-04–2023-12); the rest of the published history is either EXPERIMENTAL or PROVISIONAL;
+- the current extension (PROVISIONAL) is revisable whenever IBGE releases the next annual PIA-Produto benchmark;
+- no volume-based smoothing is applied to low-liquidity months — a disclosure statement covers the limitation instead of a threshold;
+- this is independent research, not a licensed price-reporting agency index; it should not be used as the sole basis for a commercial or contractual decision.
 
----
+## Disclaimer
 
-## ICCS
+Steel Indicator is an independent data-engineering and methodology project. It is not affiliated with, endorsed by, or sourced under license from Comex Stat/MDIC, Banco Central do Brasil, IBGE, Usiminas or CSN. All source data is public; all transformations are documented and auditable in `docs/`.
 
-O repositório também contém a especificação do:
-
-**ICCS — Índice de Condições de Crédito Setorial**
-
-Os pilares, variáveis, pesos e fontes já estão definidos no motor.
-
-A especificação pode ser consultada com:
-
-```bash
-python src/indices_setoriais.py --spec
-```
-
-Os coletores necessários para produzir o ICCS completo ainda não foram implementados.
-
----
-
-## Metodologia e decisões de arquitetura
-
-A metodologia detalhada está em:
-
-[`docs/METODOLOGIA.md`](docs/METODOLOGIA.md)
-
-As principais decisões técnicas são documentadas como **Architecture Decision Records — ADRs**:
-
-- [`ADR 0001`](docs/adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md) — âncora do preço doméstico;
-- [`ADR 0002`](docs/adr/0002-encadeamento-trimestre-mes-via-ipp.md) — transformação trimestral → mensal;
-- [`ADR 0003`](docs/adr/0003-dado-especifico-vs-proxy-e-versionamento-data-curated.md) — proxy de preço e dados curados;
-- [`ADR 0004`](docs/adr/0004-matplotlib-para-relatorio-pdf-ipia.md) — geração do relatório;
-- [`ADR 0005`](docs/adr/0005-suavizacao-seletiva-preco-importacao.md) — tratamento de baixo volume;
-- [`ADR 0006`](docs/adr/0006-remocao-icms-credito-campo-morto.md) — tratamento do ICMS;
-- [`ADR 0007`](docs/adr/0007-taxa-penetracao-importacao-acobrasil.md) — penetração das importações;
-- [`ADR 0008`](docs/adr/0008-taxonomia-observado-calculado-estimado-proxy-e-vintage.md) — proveniência e vintage dos dados.
-
----
-
-## Limitações atuais
-
-O IPIA deve ser interpretado considerando algumas limitações metodológicas importantes:
-
-- o preço doméstico ainda é uma **proxy do segmento siderúrgico**, e não um preço observado exclusivamente de HRC;
-- a cobertura histórica dos releases domésticos ainda está sendo ampliada;
-- alguns parâmetros de internação são hipóteses calibráveis;
-- ICMS de importação não é atualmente incorporado ao custo econômico;
-- a taxa de penetração disponível é agregada para produtos planos, não específica para HRC;
-- decisões de defesa comercial, incluindo antidumping, precisam ser verificadas periodicamente;
-- a lista de NCMs utilizada deve continuar sendo auditada conforme mudanças regulatórias.
-
-Essas limitações são documentadas de forma explícita porque o princípio central do projeto é:
-
-> **uma aproximação identificada é preferível a uma precisão artificial.**
-
----
-
-## Roadmap
-
-Próximas extensões possíveis do projeto:
-
-- ampliar a cobertura histórica do preço doméstico;
-- incorporar novas fontes de preços;
-- acompanhar automaticamente mudanças de defesa comercial;
-- adicionar outras siderúrgicas quando houver dados comparáveis;
-- aumentar a granularidade dos indicadores de demanda e importação;
-- expandir o motor para outros produtos siderúrgicos;
-- implementar o ICCS;
-- estudar índices para vergalhão e outros produtos;
-- evoluir de um índice isolado para uma plataforma de inteligência setorial do aço.
-
----
-
-## Status
-
-**IPIA / HRC:** implementado de ponta a ponta  
-**Coleta de dados públicos:** implementada  
-**Governança de proveniência:** implementada  
-**Relatório PDF:** implementado  
-**ICCS:** especificação definida, coletores pendentes  
-**Outros produtos siderúrgicos:** roadmap
-
----
-
-## Autor
+## Author
 
 **Matheus Mori**
 
-Estatística, Data Science, Machine Learning e desenvolvimento de produtos analíticos orientados a decisão.
+Statistics, Data Science, Machine Learning and decision-oriented analytics products.
 
 GitHub: [github.com/mori-mkm](https://github.com/mori-mkm)

@@ -31,7 +31,7 @@
    python indices_setoriais.py --check-sources   # testa as APIs publicas
    python indices_setoriais.py --iccs            # calcula o ICCS
    python indices_setoriais.py --ipia            # calcula o IPIA
-   python indices_setoriais.py --pdf-ipia        # gera relatorio PDF de 4 paginas do IPIA
+   python indices_setoriais.py --pdf-ipia        # gera relatorio PDF do IPIA-HRC (V2) a partir da ultima vintage publicada
 
  Dependencias: pandas, numpy, requests, matplotlib  (statsmodels opcional, p/ ajuste sazonal)
 =============================================================================
@@ -1003,13 +1003,21 @@ def origem_importacao_bobina_por_pais(ano_ini: int = 2020, ano_fim: int = 2026,
 
 def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
                          df_bruto: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Calcula o IPIA mensal completo: custo de importacao real (Comex Stat +
-    cambio BCB) contra a ancora de preco domestico (CSV curado + IPP).
+    """Calcula o IPIA mensal completo (V1, legado): custo de importacao real
+    (Comex Stat + cambio BCB) contra a ancora de preco domestico (CSV
+    curado + IPP).
 
-    Mesmo calculo usado pelo branch `--ipia` da CLI e pelo relatorio PDF
-    (`src/reporting/`) - centralizado aqui para as duas saidas nunca
-    divergirem. Retorna as colunas: ipia, preco_domestico_rs_t, ppi_rs_t,
-    tipo_dado_domestico, metodo_domestico, peso_confiabilidade_importacao.
+    ATE O STAGE G5/G6: era o mesmo calculo usado pelo branch `--ipia` da
+    CLI e pelo relatorio PDF. A PARTIR DO STAGE G5/G6: `--ipia`/
+    `--ipia-latest`/`--pdf-ipia` usam o caminho V2 PIA-based
+    (`calcular_ipia_hrc_v2_pia`/`executar_pipeline_ipia_hrc`, ver
+    docs/METODOLOGIA.md secao 12.11/12.12). Esta funcao permanece como
+    caminho legado: usada pelo relatorio PDF antigo (`gerar_relatorio_ipia`,
+    nao mais alcancavel por `--pdf-ipia`) e por
+    `scripts/validar_ipia_hrc_v2_final.py` como cross-check V1 vs. V2 -
+    nunca removida, protegida por characterization tests. Retorna as
+    colunas: ipia, preco_domestico_rs_t, ppi_rs_t, tipo_dado_domestico,
+    metodo_domestico, peso_confiabilidade_importacao.
 
     df_bruto aceita o dado bruto do Comex Stat ja buscado (mesmo padrao de
     `custo_importacao_detalhado_mensal`/`origem_importacao_bobina_por_pais`)
@@ -3503,7 +3511,9 @@ def main():
     ap.add_argument("--ipia-latest", action="store_true",
                      help="mostra a ultima vintage do IPIA-HRC ja publicada, sem rede e sem criar vintage nova")
     ap.add_argument("--pdf-ipia", action="store_true",
-                     help="calcula o IPIA e gera relatorio PDF de 4 paginas em data/processed/ipia_relatorio.pdf")
+                     help="gera relatorio PDF de 4 paginas do IPIA-HRC (PIA-based) a partir da ultima "
+                         "vintage publicada por --ipia, em data/processed/ipia_relatorio.pdf - sem rede, "
+                         "sem criar vintage nova; falha se nenhuma vintage existir ainda")
     ap.add_argument("--ano-ini", type=int, default=2020)
     ap.add_argument("--ano-fim", type=int, default=2026)
     a = ap.parse_args()
@@ -3573,20 +3583,33 @@ def main():
         imprimir_resumo_publicacao_ipia_hrc(vintage["manifest"], vintage["official"], vintage["provisional"])
         sys.exit(0)
     if a.pdf_ipia:
-        print(f"Gerando relatorio PDF do IPIA (4 paginas), {a.ano_ini}-{a.ano_fim} ...")
+        # Stage G6: `--pdf-ipia` migrou do relatorio legado (V1, buscava ao
+        # vivo) para o relatorio IPIA-HRC V2 (PIA-based), gerado inteiramente
+        # a partir da ultima vintage ja publicada (`--ipia`) - nunca contata
+        # Comex/IBGE/BCB nem cria vintage nova aqui (mesma garantia
+        # estrutural de `--ipia-latest`, ver `gerar_relatorio_ipia_hrc` em
+        # `reporting/report_builder.py`). `--ano-ini`/`--ano-fim` nao se
+        # aplicam pelo mesmo motivo de `--ipia` (janela de publicacao ja
+        # fixada pela vintage).
+        if a.ano_ini != 2020 or a.ano_fim != 2026:
+            print("Aviso: --ano-ini/--ano-fim nao se aplicam ao relatorio do IPIA-HRC (janela "
+                  "de publicacao ja fixada pela vintage) - ignorados nesta execucao.")
+        vintage_id = ultima_vintage_ipia_hrc_v2()
+        if vintage_id is None:
+            print("Nenhuma vintage do IPIA-HRC foi publicada ainda - rode --ipia primeiro.")
+            sys.exit(1)
+        vintage = carregar_vintage_ipia_hrc_v2(vintage_id)
+        print(f"Gerando relatorio PDF do IPIA-HRC a partir da vintage {vintage_id} ...")
         # import local: reporting/ importa deste modulo (indices_setoriais.py
         # e so o motor de calculo, nunca importa reporting no nivel de modulo -
         # evita import circular, mesmo padrao ja usado para matplotlib/requests).
-        from reporting.report_builder import gerar_relatorio_ipia
+        from reporting.report_builder import gerar_relatorio_ipia_hrc
         import os
         os.makedirs("data/processed", exist_ok=True)
         caminho = "data/processed/ipia_relatorio.pdf"
-        try:
-            n_meses = gerar_relatorio_ipia(caminho, a.ano_ini, a.ano_fim)
-        except ValueError as e:
-            print(f"Nao foi possivel gerar o relatorio: {e}")
-            sys.exit(1)
-        print(f"Relatorio salvo em {caminho} ({n_meses} meses na serie)")
+        resultado = gerar_relatorio_ipia_hrc(caminho, vintage)
+        print(f"Vintage usada: {resultado['vintage_id']}")
+        print(f"Relatorio salvo em {caminho} ({resultado['n_paginas']} paginas)")
         sys.exit(0)
     if a.spec:
         ICCS.validar()

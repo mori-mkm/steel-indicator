@@ -95,7 +95,7 @@ def rodape_pagina(fig, fontes_texto: str, pagina_num: int, data_geracao) -> None
              transform=fig.transFigure, fontsize=6.8, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, va="top")
     y_barra = 0.045
-    fig.text(margem_x, y_barra, "IPIA Brasil", transform=fig.transFigure,
+    fig.text(margem_x, y_barra, "Steel Indicator", transform=fig.transFigure,
              fontsize=8, color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS,
              fontweight="bold", va="center")
     fig.text(1 - margem_x, y_barra, f"{data_geracao:%d/%m/%Y}   {pagina_num}",
