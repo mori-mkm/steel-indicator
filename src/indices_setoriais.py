@@ -1509,6 +1509,15 @@ def calcular_serie_ipia_hrc_v2(ppi_mensal_df: pd.DataFrame | None = None,
     `reference_period`, aplicando IPIA = preco_domestico_v2/ppi_v2*100
     somente quando os dois lados forem validos no mesmo mes.
 
+    NOMENCLATURA PUBLICA (Stage G4B, ADR 0013): esta e a serie ancorada na
+    Usiminas+CSN ("IPIA-HRC Corporate Benchmark") - interna/deprecated,
+    benchmark de validacao independente para o domestic side, NUNCA a
+    serie oficial publica. O caminho oficial ("IPIA-HRC Official"/
+    "IPIA-HRC Provisional") e `calcular_ipia_hrc_v2_pia()` (ancora
+    PIA-Produto + IPP, Stage E11). Este identificador Python nao foi
+    renomeado (quebraria compatibilidade sem necessidade) - a distincao e
+    so de apresentacao/documentacao, nunca de codigo.
+
     NAO recalcula II/AFRMM/antidumping, a agregacao por KG, nem
     soma(receita)/soma(volume) - essas contas ja vem prontas nos DataFrames
     de entrada; esta funcao SO faz merge por `reference_period` + regra de
@@ -1933,6 +1942,13 @@ def calcular_ipia_hrc_v2_pia(ppi_mensal_df: pd.DataFrame | None = None,
     `agregar_ipia_hrc_multi_ncm_mensal` recorte o import side pelo
     preco domestico LEGADO antes do merge real, abaixo, com o Domestic
     Price V2 PIA.
+
+    NOMENCLATURA PUBLICA (Stage G4B, ADR 0013): este e o caminho oficial
+    "IPIA-HRC" - `separar_ipia_hrc_v2_oficial_provisional()` produz as
+    duas series publicas ("IPIA-HRC Official"/"IPIA-HRC Provisional").
+    `calcular_serie_ipia_hrc_v2` (ancora corporativa) NUNCA e a fonte
+    deste caminho - ver seu proprio docstring para o status
+    interno/deprecated dela.
 
     Regra de status conjunta (decisao Level 3 aprovada, secao 2 da
     decisao - QUATRO status, nunca so os tres do import side):

@@ -596,6 +596,53 @@ deve existir análise metodológica específica por produto.
 
 HRC e vergalhão podem demandar limiares diferentes.
 
+## 11.1 IPIA-HRC V2 — baixa liquidez: NO THRESHOLD / DISCLOSURE ONLY (Stage G4C, ADR 0013)
+
+O tratamento acima (§11) é o **baseline legado** (`VOLUME_MINIMO_T=5000`,
+`suavizar_preco_importacao`) — pertence à metodologia V1 (CIF único
+combinado, peso de confiabilidade contínuo) e **não é herdado pelo
+IPIA-HRC V2** (agregador bottom-up multi-NCM).
+
+**Decisão final (Level 3 aprovada):** IPIA-HRC V2 não adota nenhum
+threshold binário de baixa liquidez neste momento. Nem `liquidity_status`,
+nem `low_liquidity` booleano, nem `threshold_t`, nem limiar por percentil
+foram criados. `total_kg` continua publicado como informação observável,
+sem transformação. `ipia_hrc_v2`, `ppi_rs_t` e `publication_status` nunca
+dependem de volume — só de `policy_coverage`/`ppi_uncertainty_range_pct`
+(regra já aprovada, ADR 0009). Nenhuma suavização, interpolação, exclusão
+ou UNKNOWN por volume é aplicada.
+
+**Por que o percentil 10 do Stage G3 não virou contrato de produção:**
+`calc_vol["total_kg"].quantile(0.10)` (`scripts/validar_ipia_hrc_v2_final.py`)
+foi útil como ferramenta EXPLORATÓRIA para perguntar "os extremos de IPIA
+coincidem com baixa liquidez?" durante a validação — e a resposta
+empírica foi não, de forma conclusiva o suficiente para não justificar
+ação: relação volume×volatilidade fraca (correlação ≈ -0,19), e nenhum
+outlier investigado foi classificado como economicamente indefensável (0
+casos "D - SUSPICIOUS", todos "A" ou "B"). Mas o percentil em si nunca
+teve aprovação metodológica como regra de PUBLICAÇÃO, e tem um defeito
+estrutural que o desqualifica mesmo que fosse aprovado: é relativo à
+amostra corrente — o mesmo mês histórico poderia mudar de classificação
+conforme novos meses entrassem na série, mesmo com seu `total_kg`
+inalterado. Ferramenta de análise válida; nunca virou contrato.
+
+**Disclosure obrigatório** (toda publicação do IPIA-HRC deve incluir):
+
+> PT-BR: "Meses com menor volume importado podem apresentar maior
+> sensibilidade à composição das operações observadas. O IPIA-HRC
+> preserva os valores observados e não aplica suavização ou exclusão
+> automática baseada em volume."
+>
+> EN: "Months with lower import volume may show greater sensitivity to
+> the composition of observed transactions. IPIA-HRC preserves observed
+> values and does not apply automatic smoothing or exclusion based on
+> volume."
+
+**Reabertura futura:** uma regra quantitativa de liquidez (threshold,
+suavização, ou exclusão) exigirá nova decisão metodológica Level 3,
+fundamentada em evidência específica (não a reutilização silenciosa do
+percentil exploratório do Stage G3 nem do `VOLUME_MINIMO_T` legado).
+
 ---
 
 # 12. IPIA-HRC — preço doméstico
@@ -1086,33 +1133,78 @@ O Nowcast deverá:
 
 ---
 
-# 15. Bloqueantes do IPIA V2
+# 15. Bloqueantes do IPIA V2 — reconciliação (Stage G4B, ADR 0013)
 
-O IPIA reformulado permanece:
+Esta seção registrava originalmente quatro bloqueantes genéricos do "IPIA
+V2" (redação original preservada abaixo de cada item, para auditabilidade
+— nada foi apagado). O Stage G4 (`docs/decisions/ipia_hrc_v2_publication_readiness.md`)
+e o Stage G4B (ADR 0013) reconciliaram cada um contra a evidência
+acumulada nas Stages E2/E3/G3, **escopados estritamente a IPIA-HRC**.
 
-```text
-NOT READY FOR PUBLICATION
-```
+**Esta reconciliação NÃO se aplica automaticamente a:**
+- IPIA-Vergalhão (cesta NCM e fontes ainda não investigadas — §10.3/§13);
+- qualquer janela de publicação fora de 2019-02–presente (o que foi
+  validado é a janela real proposta para publicação, não o histórico
+  completo do Comex Stat, que chega a 1997 para import side isolado);
+- indicadores auxiliares que dependam de fontes não usadas pelo core do
+  IPIA-HRC V2 (ex. Aço Brasil, ver §15.4).
 
-até fechar os quatro bloqueantes:
+Um produto/janela fora deste escopo permanece com o status original
+(`NOT READY FOR PUBLICATION` até investigação própria), nunca herda um
+fechamento validado para outro produto.
 
 ## 15.1 Comex POST
 
-Executar e validar o endpoint `/general` ao vivo.
+**Redação original:** "Executar e validar o endpoint `/general` ao vivo."
+
+| Campo | Conteúdo |
+|---|---|
+| Status original | `A CONFIRMAR` — nunca executado ao vivo |
+| Evidência de resolução | `docs/research/comex_live_validation.md` §1 — FACT, endpoint/payload/schema confirmados ao vivo (`success:true`, schema idêntico ao adapter de produção) |
+| Escopo do fechamento | Genérico ao endpoint — não depende de produto específico |
+| Status atual | **CLOSED** (IPIA-HRC e qualquer outro produto que use o mesmo endpoint) |
 
 ## 15.2 Histórico de frete/seguro/CIF
 
-Determinar desde quando as métricas estão preenchidas de forma utilizável por produto/NCM.
+**Redação original:** "Determinar desde quando as métricas estão preenchidas de forma utilizável por produto/NCM."
+
+| Campo | Conteúdo |
+|---|---|
+| Status original | `A CONFIRMAR` |
+| Evidência de resolução | `docs/research/comex_live_validation.md` §3/§11 — FACT, `metricFreight`/`metricInsurance` USABLE desde 1997-01 para a cesta HRC (`NCM_BOBINA_QUENTE`) |
+| Escopo do fechamento | Somente a cesta HRC; a janela real de publicação (2019-02+) fica inteiramente dentro do intervalo confirmado, com folga de 22 anos |
+| Status atual | **CLOSED para IPIA-HRC, janela de publicação 2019+.** Continua `A CONFIRMAR` para vergalhão/outras famílias (não testadas) |
 
 ## 15.3 NCMs vigentes por período
 
-Construir a lógica histórica que elimina códigos extintos fora de vigência.
+**Redação original:** "Construir a lógica histórica que elimina códigos extintos fora de vigência."
+
+| Campo | Conteúdo |
+|---|---|
+| Status original | `A CONFIRMAR` |
+| Evidência de resolução | `docs/research/hrc_ncm_history.md` §4/§8/§12 — FACT via duas tabelas oficiais de correlação MDIC/Camex (2012↔2017, 2017↔2022): zero mudanças na posição 7208 desde 2012 |
+| Escopo do fechamento | Somente os 13 NCMs de `NCM_BOBINA_QUENTE`, com evidência FACT para 2012-presente (cobre toda a janela de publicação 2019+ com folga); a janela 1997-2012 permanece só INFERENCE (sem tabela de correlação localizada), mas nunca entra na publicação proposta |
+| Status atual | **CLOSED para IPIA-HRC, janela de publicação 2019+.** Continua `A CONFIRMAR` para vergalhão e para qualquer backfill de import-side isolado anterior a 2019 |
 
 ## 15.4 Excel do Aço Brasil
 
-Baixar, inspecionar, mapear e validar as abas/colunas relevantes.
+**Redação original:** "Baixar, inspecionar, mapear e validar as abas/colunas relevantes."
 
-Esses bloqueantes devem aparecer em status operacional do projeto até encerramento.
+| Campo | Conteúdo |
+|---|---|
+| Status original | `A CONFIRMAR` |
+| Evidência de resolução | Inspeção do pipeline V2 (`preco_domestico_hrc_pia_v2`, `agregar_ipia_hrc_multi_ncm_mensal`, `calcular_ipia_hrc_v2_pia`): nenhuma dependência de Aço Brasil em nenhum componente do cálculo core do IPIA-HRC |
+| Escopo do fechamento | Aço Brasil nunca foi adotado pelo core V2 (só alimenta a taxa de penetração de importação do caminho legado, `taxa_penetracao_importacao_planos_mensal`, um indicador auxiliar/legacy, não o IPIA-HRC em si) |
+| Status atual | **NOT APPLICABLE ao core do IPIA-HRC.** O Instituto Aço Brasil continua podendo existir como fonte de indicadores auxiliares/legacy (ex. penetração de importação) — se um relatório futuro reintroduzir esse indicador ao lado do IPIA-HRC V2, este bloqueante volta a ser relevante e precisa ser reaberto então |
+
+## 15.5 Status consolidado
+
+Com os quatro itens acima fechados ou não-aplicáveis **especificamente para
+IPIA-HRC, janela 2019-02–presente**, o IPIA-HRC deixa de estar bloqueado
+por `docs/METODOLOGIA.md` §15 nessa janela. Isso não substitui os demais
+critérios de publication-readiness (proxy do domestic, disclosure, política
+de baixa liquidez — ver ADR 0013) nem autoriza wiring de CLI/PDF, que
+permanece decisão separada.
 
 ---
 
