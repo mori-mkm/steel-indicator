@@ -1885,6 +1885,216 @@ def preco_domestico_hrc_pia_v2(pia_anual_df: pd.DataFrame | None = None,
     return linhas[cols].sort_values("reference_period").reset_index(drop=True)
 
 
+# =============================================================================
+# 3g. IPIA-HRC V2 PIA-based - integracao oficial + provisional (Stage E11, ADR 0011)
+# =============================================================================
+# Decisao Level 3 aprovada: integra o import side bottom-up multi-NCM
+# (Stage E7) com o Domestic Price V2 caminho PIA (`preco_domestico_hrc_pia_v2`,
+# Stage E10/ADR 0010) - NUNCA a ancora corporativa Usiminas+CSN
+# (`preco_domestico_hrc_mensal_v2`), que continua existindo so como
+# benchmark independente (ADR 0010 item 2). Mesmo padrao de merge/formula
+# de `calcular_serie_ipia_hrc_v2` (Stage E9, acima) - a novidade desta
+# secao e o QUARTO status (PROVISIONAL) e a separacao explicita entre
+# saida oficial e saida provisional.
+
+STATUS_PROVISIONAL = "PROVISIONAL"
+# Vive aqui, nao em steel_indicator.parameters.trade_policy, porque NAO e um
+# status de politica comercial (import side) - trade_policy.status_efetivo()
+# nunca deve devolver PROVISIONAL, so PUBLICATION_GRADE/EXPERIMENTAL/UNKNOWN
+# (isso continua correto e nao muda aqui). PROVISIONAL existe so no nivel
+# COMPOSTO (IPIA = domestico x import), quando o lado domestico e a
+# extensao provisional pos-ultima-PIA de `preco_domestico_hrc_pia_v2`.
+
+_COLS_IPIA_HRC_V2_PIA_OFICIAL = [
+    "reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2", "publication_status",
+    "domestic_is_proxy",
+    "import_status", "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
+    "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct",
+    "pia_reference_year", "pia_anchor_price_rs_t", "ipp_series_id",
+    "domestic_provenance_level", "domestic_proxy_reason", "domestic_validation_status",
+]
+_COLS_IPIA_HRC_V2_PIA_PROVISIONAL = _COLS_IPIA_HRC_V2_PIA_OFICIAL + ["is_provisional", "last_pia_year"]
+
+
+def calcular_ipia_hrc_v2_pia(ppi_mensal_df: pd.DataFrame | None = None,
+                              pia_domestico_df: pd.DataFrame | None = None,
+                              ano_ini: int = 2012, ano_fim: int = 2026,
+                              df_bruto: pd.DataFrame | None = None,
+                              congelado_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """IPIA-HRC V2 PIA-based (Stage E11): mesmo import side de
+    `calcular_serie_ipia_hrc_v2` (agregador bottom-up multi-NCM), mas o
+    preco domestico vem de `preco_domestico_hrc_pia_v2()` (PIA-Produto +
+    IPP via Denton), nunca da ancora corporativa. `ppi_mensal_df`/
+    `pia_domestico_df` aceitam o resultado ja pronto das duas funcoes
+    (mesmo padrao de injecao de teste do resto do modulo); se None, gera
+    ao vivo. Mesma tecnica de `domestico_df` "curinga" que
+    `calcular_serie_ipia_hrc_v2` ja usa, pela mesma razao: evitar que
+    `agregar_ipia_hrc_multi_ncm_mensal` recorte o import side pelo
+    preco domestico LEGADO antes do merge real, abaixo, com o Domestic
+    Price V2 PIA.
+
+    Regra de status conjunta (decisao Level 3 aprovada, secao 2 da
+    decisao - QUATRO status, nunca so os tres do import side):
+      - domestico ausente no mes OU import UNKNOWN -> IPIA UNKNOWN;
+      - domestico BENCHMARKED (`is_provisional=False`) + import
+        EXPERIMENTAL -> IPIA EXPERIMENTAL;
+      - domestico BENCHMARKED + import PUBLICATION_GRADE -> IPIA
+        PUBLICATION_GRADE;
+      - domestico PROVISIONAL (`is_provisional=True`) + import calculavel
+        (EXPERIMENTAL OU PUBLICATION_GRADE) -> IPIA PROVISIONAL, SEMPRE -
+        PROVISIONAL nunca vira sinonimo de "PUBLICATION_GRADE com uma flag
+        is_provisional=True" (proibido explicitamente pela decisao).
+
+    `domestic_is_proxy` continua uma flag ortogonal a `publication_status`
+    (mesma regra de `calcular_serie_ipia_hrc_v2`) - a serie PIA e SEMPRE
+    proxy (`PROXY_REASON_DESTINATION_MIX`), em qualquer um dos quatro
+    status.
+
+    `last_pia_year` (o ultimo ano PIA benchmarked, calculado dinamicamente
+    a partir de `pia_domestico_df` - nunca hardcoded) e anexado em TODA
+    linha do resultado, para permitir a um chamador identificar a fronteira
+    benchmarked/provisional sem reabrir `preco_domestico_hrc_pia_v2`.
+
+    `congelado_df` (opcional): saida OFICIAL (EXPERIMENTAL/PUBLICATION_GRADE)
+    de uma execucao ANTERIOR desta mesma funcao. Quando informado, todo
+    `reference_period` presente em `congelado_df` tem suas colunas
+    sobrescritas pelos valores CONGELADOS, ignorando o que o recalculo
+    desta execucao produziria para esses meses - implementa a regra
+    "BENCHMARKED publicado -> congelado no fluxo normal" (secao 5 da
+    decisao) sem precisar reabrir o Denton conjunto de
+    `preco_domestico_hrc_pia_v2` nem construir infraestrutura de vintage:
+    qualquer mudanca upstream (revisao do IPP, novo ano de PIA reprocessando
+    o Denton conjunto - ver a "propriedade conhecida" documentada em
+    `preco_domestico_hrc_pia_v2`/ADR 0010) e simplesmente descartada para
+    os meses ja congelados. Meses NAO presentes em `congelado_df` (novos
+    meses provisional, ou meses provisional promovidos a benchmarked por
+    uma nova PIA) usam sempre o valor fresco desta execucao - e assim que
+    o provisional avanca mes a mes e e promovido quando uma nova PIA chega.
+    Nao e um mecanismo de vintage completo (nao persiste nada sozinho, nao
+    resolve as duas excecoes futuras de revisao de fonte/mudanca
+    metodologica - decisao explicita de nao implementar isso ainda) - so a
+    peca minima que torna o congelamento no fluxo normal possivel para quem
+    orquestrar as execucoes (ver `scripts/gerar_ipia_hrc_v2_pia.py`).
+
+    Formula preservada, sem alteracao: IPIA = preco_domestico / ppi * 100.
+    """
+    if ppi_mensal_df is None:
+        # mesmo motivo/tecnica documentada em calcular_serie_ipia_hrc_v2:
+        # sem isso, agregar_ipia_hrc_multi_ncm_mensal faria seu proprio
+        # merge interno com o preco domestico LEGADO e recortaria o import
+        # side para a cobertura (curta) do CSV curado legado, antes mesmo
+        # de chegar no merge real com o Domestic Price V2 PIA abaixo.
+        domestico_curinga = pd.DataFrame(
+            {"preco_rs_t": 1.0}, index=pd.date_range(f"{ano_ini}-01-01", f"{ano_fim}-12-01", freq="MS"))
+        ppi_mensal_df = agregar_ipia_hrc_multi_ncm_mensal(
+            ano_ini=ano_ini, ano_fim=ano_fim, df_bruto=df_bruto, domestico_df=domestico_curinga)
+    if pia_domestico_df is None:
+        pia_domestico_df = preco_domestico_hrc_pia_v2()
+
+    imp = ppi_mensal_df[_COLS_IMPORT_SIDE_V2].rename(columns={"publication_status": "import_status"})
+    dom = pia_domestico_df.rename(columns={
+        "provenance_level": "domestic_provenance_level",
+        "is_proxy": "domestic_is_proxy",
+        "proxy_reason": "domestic_proxy_reason",
+        "validation_status": "domestic_validation_status",
+    })
+
+    merged = imp.merge(dom, on="reference_period", how="outer", validate="one_to_one")
+    merged = merged.sort_values("reference_period").reset_index(drop=True)
+
+    domestico_presente = merged["preco_domestico_rs_t"].notna()
+    domestico_provisional = domestico_presente & merged["is_provisional"].fillna(False).astype(bool)
+    domestico_benchmarked = domestico_presente & ~domestico_provisional
+    import_status = merged["import_status"]
+    import_calculavel = import_status.isin([STATUS_EXPERIMENTAL, STATUS_PUBLICATION_GRADE])
+
+    status = pd.Series(STATUS_UNKNOWN, index=merged.index)
+    status[domestico_benchmarked & (import_status == STATUS_EXPERIMENTAL)] = STATUS_EXPERIMENTAL
+    status[domestico_benchmarked & (import_status == STATUS_PUBLICATION_GRADE)] = STATUS_PUBLICATION_GRADE
+    status[domestico_provisional & import_calculavel] = STATUS_PROVISIONAL
+    merged["publication_status"] = status
+
+    calculavel = status != STATUS_UNKNOWN
+    merged["ipia_hrc_v2"] = np.nan
+    merged.loc[calculavel, "ipia_hrc_v2"] = ipia(
+        merged.loc[calculavel, "preco_domestico_rs_t"], merged.loc[calculavel, "ppi_rs_t"])
+
+    if not pia_domestico_df.empty:
+        benchmarked_pia = pia_domestico_df.loc[~pia_domestico_df["is_provisional"], "pia_reference_year"]
+        last_pia_year = int(benchmarked_pia.max()) if not benchmarked_pia.empty else None
+    else:
+        last_pia_year = None
+    merged["last_pia_year"] = last_pia_year
+
+    if congelado_df is not None and not congelado_df.empty:
+        # sobrescreve TODAS as colunas compartilhadas (exceto reference_period,
+        # a chave, e last_pia_year, valor de execucao corrente/global, nunca
+        # congelado) com o valor congelado - nunca so publication_status/ipia,
+        # para nao deixar colunas auxiliares (ex. ppi_lower/upper) inconsistentes
+        # com um valor congelado que nao bate mais com o recalculo fresco.
+        congelado = congelado_df.set_index("reference_period")
+
+        # um mes congelado que o recalculo fresco NAO produz mais (ex.:
+        # janela de import_side recomputada mais estreita, fonte fora do
+        # ar naquele mes especifico) nunca pode simplesmente desaparecer
+        # do resultado - isso violaria a mesma garantia de congelamento
+        # que a sobrescrita abaixo protege, so que por omissao em vez de
+        # por valor errado. Reinsere a linha congelada inteira antes de
+        # sobrescrever.
+        ausentes = congelado.index.difference(merged["reference_period"])
+        if len(ausentes) > 0:
+            linhas_ausentes = pd.DataFrame({"reference_period": ausentes})
+            for col in merged.columns:
+                if col == "reference_period":
+                    continue
+                elif col == "last_pia_year":
+                    linhas_ausentes[col] = last_pia_year
+                elif col == "is_provisional":
+                    linhas_ausentes[col] = False  # congelado_df so guarda saida OFICIAL, nunca provisional
+                elif col in congelado.columns:
+                    linhas_ausentes[col] = linhas_ausentes["reference_period"].map(congelado[col])
+                else:
+                    linhas_ausentes[col] = np.nan
+            merged = pd.concat([merged, linhas_ausentes], ignore_index=True)
+            merged = merged.sort_values("reference_period").reset_index(drop=True)
+
+        cols_congelar = [c for c in congelado.columns if c in merged.columns
+                         and c not in ("reference_period", "last_pia_year")]
+        meses_congelados = merged["reference_period"].isin(congelado.index)
+        for col in cols_congelar:
+            merged.loc[meses_congelados, col] = merged.loc[meses_congelados, "reference_period"].map(congelado[col])
+
+    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2", "publication_status",
+            "import_status",
+            "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
+            "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct",
+            "pia_reference_year", "pia_anchor_price_rs_t", "ipp_series_id",
+            "domestic_provenance_level", "domestic_is_proxy", "domestic_proxy_reason", "domestic_validation_status",
+            "is_provisional", "last_pia_year"]
+    return merged[cols]
+
+
+def separar_ipia_hrc_v2_oficial_provisional(serie: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Separa a saida de `calcular_ipia_hrc_v2_pia` em DUAS series
+    explicitas (secao 3 da decisao Level 3 aprovada) - NUNCA concatenadas
+    automaticamente de volta:
+
+      - OFICIAL: so EXPERIMENTAL/PUBLICATION_GRADE (nunca PROVISIONAL,
+        nunca UNKNOWN - um mes UNKNOWN nao e "dado oficial com buraco", e
+        simplesmente ausencia, tratada pelo consumidor/visualizacao como
+        gap real, nunca uma linha com NaN no arquivo publicado);
+      - PROVISIONAL: so PROVISIONAL, com os campos adicionais
+        `is_provisional`/`last_pia_year` (o arquivo oficial nao precisa
+        deles - todo mes oficial ja e, por definicao, nao-provisional).
+
+    Nenhum recalculo acontece aqui - so filtro e selecao de colunas.
+    """
+    oficial = serie[serie["publication_status"].isin([STATUS_EXPERIMENTAL, STATUS_PUBLICATION_GRADE])]
+    provisional = serie[serie["publication_status"] == STATUS_PROVISIONAL]
+    return (oficial[_COLS_IPIA_HRC_V2_PIA_OFICIAL].reset_index(drop=True),
+            provisional[_COLS_IPIA_HRC_V2_PIA_PROVISIONAL].reset_index(drop=True))
+
+
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
                                        df_bruto: pd.DataFrame | None = None,
                                        params: ParamsIPIA | None = None) -> pd.DataFrame:

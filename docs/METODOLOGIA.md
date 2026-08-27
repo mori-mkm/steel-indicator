@@ -822,6 +822,100 @@ nível.
 - Não conectado a `--selftest`/CLI/relatório nesta stage — mesmo status
   dos demais caminhos V2 (peça de cálculo interna, testada).
 
+## 12.11 IPIA-HRC V2 PIA-based — status PROVISIONAL e séries oficial/provisional (Stage E11, ADR 0011)
+
+Decisão Level 3 aprovada: integra o import side bottom-up multi-NCM
+(`agregar_ipia_hrc_multi_ncm_mensal`, §9.5.2) com o Domestic Price V2
+caminho PIA (§12.10) — nunca a âncora corporativa Usiminas+CSN, que
+continua existindo só como benchmark independente. Implementado em
+`calcular_ipia_hrc_v2_pia()`/`separar_ipia_hrc_v2_oficial_provisional()`
+(`src/indices_setoriais.py`). Não conectado a `--selftest`/CLI/relatório
+nesta stage — mesmo status dos demais caminhos V2.
+
+- **Quarto status, `PROVISIONAL`**: o vocabulário de `publication_status`
+  passa a ter quatro valores — `PUBLICATION_GRADE`, `EXPERIMENTAL`,
+  `PROVISIONAL`, `UNKNOWN`. `PROVISIONAL` vive em `indices_setoriais.py`,
+  não em `steel_indicator.parameters.trade_policy` — não é um status de
+  política comercial (import side); `status_efetivo()` continua nunca
+  devolvendo `PROVISIONAL`. `PROVISIONAL` só existe no nível COMPOSTO
+  (domestico × import), quando o lado doméstico é a extensão provisional
+  pós-última-PIA de `preco_domestico_hrc_pia_v2()`.
+- **Regra de status conjunta**, usando dinamicamente o último ano PIA
+  benchmarked (`last_pia_year`, calculado a partir do próprio
+  `pia_domestico_df` de cada execução, nunca hardcoded):
+  - domestico ausente OU import `UNKNOWN` → IPIA `UNKNOWN`;
+  - domestico BENCHMARKED (`is_provisional=False`) + import
+    `EXPERIMENTAL` → IPIA `EXPERIMENTAL`;
+  - domestico BENCHMARKED + import `PUBLICATION_GRADE` → IPIA
+    `PUBLICATION_GRADE`;
+  - domestico PROVISIONAL (`is_provisional=True`) + import calculável
+    (`EXPERIMENTAL` ou `PUBLICATION_GRADE`) → IPIA `PROVISIONAL`, sempre —
+    nunca um `PUBLICATION_GRADE`/`EXPERIMENTAL` com uma flag
+    `is_provisional=True` como substituto.
+  `domestic_is_proxy` continua ortogonal a `publication_status` (a série
+  PIA é sempre proxy, em qualquer um dos quatro status).
+- **Duas saídas explicitamente separadas, nunca concatenadas
+  automaticamente**: OFFICIAL (só `EXPERIMENTAL`/`PUBLICATION_GRADE`,
+  nunca `PROVISIONAL`) e PROVISIONAL (só `PROVISIONAL`, com os campos
+  adicionais `is_provisional`/`last_pia_year`). Meses `UNKNOWN` não
+  aparecem em nenhum dos dois arquivos publicados — ficam disponíveis na
+  série completa (`calcular_ipia_hrc_v2_pia()`, antes de separar) para
+  quem precisar do gap explícito (ex. visualização). O cálculo econômico é
+  o mesmo dos demais caminhos V2 (`IPIA = preço doméstico / PPI × 100`,
+  nunca duplicado fora de `ipia()`) — a separação é contrato de
+  estabilidade de publicação, não mudança de fórmula.
+- **Congelamento no fluxo normal**: meses já publicados como OFFICIAL
+  (`EXPERIMENTAL`/`PUBLICATION_GRADE`) devem ficar congelados — uma
+  atualização normal do provisional (novo mês de IPP, ou até um novo ano
+  de PIA promovendo meses provisórios a benchmarked) não pode mover
+  números históricos já publicados. Implementado via `congelado_df`
+  (parâmetro opcional de `calcular_ipia_hrc_v2_pia()`): recebe a saída
+  OFFICIAL de uma execução anterior e sobrescreve, verbatim, todo mês nela
+  presente — descartando o que o recálculo fresco desta execução
+  produziria para esses meses, independente da causa da mudança upstream
+  (revisão do IPP, ou a "propriedade conhecida" do Denton conjunto de
+  `preco_domestico_hrc_pia_v2()`/ADR 0010, que pode revisar meses antigos
+  ao somar um novo ano de PIA). Deliberadamente **não** foi implementado
+  um Denton condicionado ao último ponto congelado (mecanismo permitido,
+  mas não obrigatório, pela decisão aprovada) — o congelamento por
+  sobrescrita cobre a garantia exigida (nenhum mês OFFICIAL já publicado
+  muda) de forma mais simples e auditável, sem tocar a matemática de
+  `denton_proporcional()`; a smoothness de continuidade entre o último mês
+  congelado e o primeiro mês recém-promovido a benchmarked fica um pouco
+  mais abrupta nesse cenário específico, tradeoff aceito nesta stage.
+  Meses fora de `congelado_df` (novos meses provisórios, ou meses
+  provisórios promovidos a benchmarked por uma nova PIA) sempre usam o
+  valor fresco da execução — é assim que o provisional avança mês a mês e
+  é promovido quando uma nova PIA chega.
+- **Duas exceções futuras ao congelamento, NÃO implementadas nesta
+  stage** (a decisão aprovada só exige que a arquitetura não as torne
+  impossíveis, não que sejam construídas agora): (1) correção/revisão
+  oficial da fonte IBGE (PIA ou IPP republicados com valor corrigido); (2)
+  mudança metodológica deliberada (ex. trocar o benchmark ou o método de
+  encadeamento). Qualquer uma delas exigiria decisão explícita de
+  reabrir/reprocessar meses congelados — fora do fluxo normal.
+- **Nenhuma infraestrutura de vintage/persistência foi implementada** —
+  `congelado_df` é injetado pelo chamador (ex. um script de orquestração
+  que lê o CSV OFFICIAL anterior antes de rodar de novo); não há
+  armazenamento de vintages históricos automatizado. O valor corrente do
+  IPIA é sempre mostrado como PROVISIONAL, nunca como definitivo.
+- **Execução real** (`scripts/gerar_ipia_hrc_v2_pia.py`,
+  `data/processed/ipia_hrc_v2_official.csv`,
+  `data/processed/ipia_hrc_v2_provisional.csv`): OFFICIAL cobre 2019-02 a
+  2023-12 (48 meses — 27 `EXPERIMENTAL`, 21 `PUBLICATION_GRADE`; IPIA
+  mín=70,06, mediana=95,73, máx=154,13). PROVISIONAL cobre 2024-01 a
+  2026-06 (30 meses; IPIA mín=95,64, mediana=113,37, máx=131,32; último
+  valor corrente, 2026-06, PROVISIONAL=126,74). Comparado contra o IPIA-HRC
+  V2 corporate antigo (`calcular_serie_ipia_hrc_v2`, âncora Usiminas+CSN)
+  nos 15 meses sobrepostos (2025-04 a 2026-06): o IPIA PIA-based fica
+  sistematicamente **abaixo** do corporate, delta médio -11,66%,
+  desvio-padrão do delta 1,49pp — mesma magnitude e estabilidade já
+  medidas no nível de preço doméstico isolado (§12.10), agora propagada
+  para o índice completo (a correção de product-mix do lado doméstico é a
+  explicação estrutural dominante do gap, não o import side, que é
+  idêntico nos dois caminhos). Nenhum ajuste foi aplicado a partir dessa
+  comparação — é validação, não calibração.
+
 ---
 
 # 13. IPIA-Vergalhão — preço doméstico
