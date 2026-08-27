@@ -750,6 +750,78 @@ modificação). Não conectado a `--selftest`/CLI/relatório nesta stage.
   como coletor ao vivo); `ibge_sidra_ipp_siderurgia` é um coletor
   executado ao vivo (VERIFICADO quando roda).
 
+## 12.10 Domestic Price V2 — benchmark PIA-Produto (Stage E10, ADR 0010)
+
+Decisão Level 3 aprovada (investigação completa em
+`docs/research/hrc_domestic_price_sources.md`): a IBGE PIA-Produto
+(tabela SIDRA 7752, categoria Prodlist 2422.2020 "Bobinas a quente de
+aços ao carbono, não revestidos") passa a ser um **segundo caminho**,
+paralelo à âncora corporativa (§12.9), implementado em
+`preco_domestico_hrc_pia_v2()`/`ibge_sidra_pia_hrc_anual()`/
+`denton_proporcional()` (`src/indices_setoriais.py`). Os dois caminhos
+**nunca são combinados por splice/reancoragem** — a âncora corporativa
+serve só como benchmark de validação externa contra a série PIA
+(`scripts/gerar_domestic_price_hrc_pia_v2.py`), nunca para recalibrar seu
+nível.
+
+- **Nível PIA×IPP hierarquia (§12.8)**: PIA é uma fonte pública
+  produto-específica (nível 2 da hierarquia) — mais específica de produto
+  que a âncora corporativa "Siderurgia" (nível 4, proxy de segmento), mas
+  mistura mercado interno + exportação (confirmado contra a nota técnica
+  oficial do IBGE — nenhuma variável do produto separa destino). Por
+  isso é PROXY também, com motivo explícito e ortogonal ao da âncora
+  corporativa: `proxy_reason=DESTINATION_MIX` (PIA) vs.
+  `proxy_reason=PRODUCT_AGGREGATION` (IPP 242-Siderurgia, reaproveitado
+  sem alteração do §12.9).
+- **Benchmarking temporal**: nível anual da PIA (`receita líquida de
+  vendas / quantidade vendida`) distribuído mês a mês pelo movimento do
+  IPP 242-Siderurgia via **Proportional Denton** (primeiras diferenças —
+  IMF *Quarterly National Accounts Manual*, cap. 6), nunca forward-fill
+  anual, interpolação linear simples ou pro-rata degrau. Restrição:
+  `mean(preço mensal do ano) == preço PIA daquele ano` — rotulada
+  `TEMPORAL_ALLOCATION_PROXY` porque a PIA é um *unit value* ponderado
+  pela quantidade real vendida no ano, não uma soma de preços mensais; o
+  projeto não possui hoje quantidade doméstica de HRC mensal para pesar
+  a restrição de forma mais fiel, e não inventa esse peso.
+- **Propriedade conhecida do Denton conjunto**: como a otimização cobre
+  toda a janela benchmarked de uma vez (para suavizar a fronteira entre
+  anos), reprocessar a série ao receber um novo ano de PIA pode revisar
+  levemente meses de anos mais antigos perto da nova fronteira — prática
+  padrão de temporal benchmarking, não uma falha de look-ahead (a média
+  anual de cada ano continua batendo exatamente o alvo PIA em qualquer
+  reprocessamento). A extensão provisional (abaixo), por outro lado,
+  nunca olha para frente — depende só do IPP até o próprio mês.
+- **Cobertura**: só gera série mensal para os anos em que a PIA e os 12
+  meses do IPP 242-Siderurgia coexistem (janela real, confirmada ao vivo:
+  2019-2023 — o IPP 242-Siderurgia só começa em dez/2018). Anos de PIA
+  sem IPP completo (2014-2018) não viram série mensal artificial — ficam
+  disponíveis só como benchmark anual isolado via
+  `ibge_sidra_pia_hrc_anual()`.
+- **Extensão provisional**: após o último ano PIA observado (hoje 2023),
+  os meses seguintes são encadeados a partir da última relação
+  preço-benchmarked/IPP observada (mesma fórmula de
+  `encadear_preco_domestico_mensal`, a partir do último mês Denton em vez
+  de uma âncora trimestral direta) — `is_provisional=True`,
+  `provenance_level=ESTIMADO`. Nunca promovida a publication-grade
+  automaticamente; nunca misturada silenciosamente com a janela
+  benchmarked. `pia_reference_year` é preservado em toda linha
+  especificamente para permitir, no futuro, reprocessar os meses
+  provisórios quando uma nova PIA sair — o mecanismo de revisão/vintage
+  em si não foi implementado nesta stage, só os campos que o permitem.
+- **Execução real** (`scripts/gerar_domestic_price_hrc_pia_v2.py`,
+  `data/processed/domestic_price_hrc_pia_v2.csv`): 60 meses benchmarked
+  (2019-01 a 2023-12) + 30 meses provisórios (2024-01 a 2026-06, na data
+  desta execução). Comparado contra a âncora corporativa V2 nos 15 meses
+  em que as duas têm dado: PIA×IPP fica sistematicamente **abaixo** da
+  âncora corporativa, delta médio -11,66%, desvio-padrão do delta 1,49pp
+  (gap estável, não um ruído) — consistente com a hipótese já registrada
+  em `docs/research/hrc_domestic_price_sources.md` de que a âncora
+  corporativa "Siderurgia" está inflada por mix de produto frente a um
+  preço mais próximo de HRC puro. Nenhum ajuste foi aplicado a partir
+  dessa comparação — é validação, não calibração.
+- Não conectado a `--selftest`/CLI/relatório nesta stage — mesmo status
+  dos demais caminhos V2 (peça de cálculo interna, testada).
+
 ---
 
 # 13. IPIA-Vergalhão — preço doméstico

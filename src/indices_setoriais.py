@@ -58,7 +58,7 @@ from steel_indicator.parameters.trade_policy import (
     resolver_ii, resolver_afrmm, resolver_antidumping, status_efetivo, STATUS_UNKNOWN,
     STATUS_PUBLICATION_GRADE, STATUS_EXPERIMENTAL, PUBLICATION_GRADE_INICIO,
 )
-from steel_indicator.data.contracts import VALIDACAO_DOCUMENTADO
+from steel_indicator.data.contracts import VALIDACAO_DOCUMENTADO, VALIDACAO_VERIFICADO
 
 # =============================================================================
 # 0. CONFIGURACAO
@@ -1590,6 +1590,299 @@ def calcular_serie_ipia_hrc_v2(ppi_mensal_df: pd.DataFrame | None = None,
             "domestic_provenance_level", "domestic_is_proxy", "domestic_validation_status",
             "receita_total", "volume_total", "quantidade_empresas"]
     return merged[cols]
+
+
+# =============================================================================
+# 3f. Domestic Price V2 - PIA-Produto benchmark (Stage E10)
+# =============================================================================
+# Decisao Level 3 aprovada (docs/research/hrc_domestic_price_sources.md):
+# adota a IBGE PIA-Produto (tabela SIDRA 7752, categoria 54849 = Prodlist
+# 2422.2020 "Bobinas a quente de acos ao carbono, nao revestidos") como
+# BENCHMARK ANUAL de nivel do Domestic Price HRC V2 - especifico de HRC
+# (ao contrario da ancora corporativa "Siderurgia" de
+# `preco_domestico_hrc_mensal_v2`), mas mistura mercado interno +
+# exportacao (confirmado contra a nota tecnica oficial do IBGE: nenhuma
+# variavel do produto separa destino - e o proprio desenho da pesquisa,
+# pensada para ser cruzada com Comex, nao para ja vir separada). Por isso
+# a PIA tambem e PROXY, so que por outro motivo
+# (`PROXY_REASON_DESTINATION_MIX`, nao `PROXY_REASON_PRODUCT_AGGREGATION`
+# da ancora corporativa/IPP) - ver o adendo de pesquisa em
+# docs/research/hrc_domestic_price_sources.md para a evidencia completa
+# (exposicao a exportacao medida: 12%-43% do volume, mediana 26,2%,
+# 2014-2023).
+#
+# A cesta anual (PIA) e encadeada mes a mes pelo movimento do IPP
+# 242-Siderurgia (`ibge_sidra_ipp_siderurgia`, ja existente, reaproveitada
+# sem alteracao) via **Proportional Denton** (primeiras diferencas - IMF
+# Quarterly National Accounts Manual, cap. 6): preserva ao maximo o
+# movimento relativo mes a mes do IPP, sujeito a
+# mean(preco_mensal do ano) == preco_pia_hrc daquele ano - nunca
+# forward-fill anual, nunca interpolacao linear simples, nunca degrau em
+# janeiro (ver `denton_proporcional`).
+#
+# Este caminho NAO substitui `preco_domestico_hrc_mensal_v2` (ancora
+# corporativa Usiminas+CSN, Stage E8) - os dois coexistem. A ancora
+# corporativa continua disponivel so como BENCHMARK/sanity-check contra
+# esta serie (comparacao feita em scripts/gerar_domestic_price_hrc_pia_v2.py),
+# NUNCA usada para fazer splice/reancorar a serie PIA (decisao Level 3:
+# nao ha janela de sobreposicao suficiente entre as duas fontes para
+# calibrar uma transicao, e o mix de produto e diferente).
+#
+# NAO conectado a --selftest/CLI/relatorio nesta stage - mesmo status dos
+# demais caminhos V2 (peca de calculo interna, testada).
+
+IBGE_SIDRA_PIA_PRODUTO_URL = ("https://servicodados.ibge.gov.br/api/v3/agregados/7752"
+                              "/periodos/all/variaveis/864|1982")
+IBGE_SIDRA_PIA_PRODUTO_METADADOS_URL = "https://servicodados.ibge.gov.br/api/v3/agregados/7752/metadados"
+# Categoria 54849 na classificacao 1264 (Prodlist 2016/2019/2022) da tabela
+# SIDRA 7752 = "2422.2020 Bobinas a quente de acos ao carbono, nao
+# revestidos" - confirmada ao vivo (unidade "Toneladas") em
+# docs/research/hrc_domestic_price_sources.md. Variavel 864 = Receita
+# liquida de vendas (Mil Reais); variavel 1982 = Quantidade vendida
+# (Toneladas).
+PIA_CATEGORIA_HRC = 54849
+
+PROXY_REASON_DESTINATION_MIX = "DESTINATION_MIX"          # PIA: mistura mercado interno + exportacao
+PROXY_REASON_PRODUCT_AGGREGATION = "PRODUCT_AGGREGATION"  # IPP 242-Siderurgia: agregado de toda a siderurgia
+
+
+def ibge_sidra_pia_hrc_anual() -> pd.DataFrame:
+    """Serie ANUAL do preco implicito HRC (IBGE/SIDRA, PIA-Produto, tabela
+    7752, categoria `PIA_CATEGORIA_HRC`) - receita liquida de vendas /
+    quantidade vendida, ambas do MESMO codigo Prodlist (nunca numerador e
+    denominador de escopos diferentes).
+
+    HRC-especifica (ao contrario da ancora corporativa "Siderurgia"), mas
+    MISTURA mercado interno + exportacao - confirmado contra a nota
+    tecnica oficial da PIA-Produto (nenhuma variavel do produto separa
+    destino). Todo consumidor desta funcao deve tratar o resultado como
+    PROXY (`PROXY_REASON_DESTINATION_MIX`) - nunca como preco domestico
+    puro. Ver docs/research/hrc_domestic_price_sources.md para a evidencia
+    completa e a medicao de materialidade da exposicao a exportacao.
+
+    Valida a unidade da categoria (`Toneladas`) contra o metadado ao vivo
+    antes de calcular o preco - nunca confia que a categoria/tabela nao
+    mudou de forma silenciosa.
+
+    Retorna DataFrame indexado por ano (int), colunas
+    receita_liquida_mil_rs, quantidade_vendida_t, preco_rs_t.
+    """
+    meta = _get_json(IBGE_SIDRA_PIA_PRODUTO_METADADOS_URL)
+    classificacao = next(c for c in meta["classificacoes"] if c["id"] == 1264)
+    categoria = next(c for c in classificacao["categorias"] if c["id"] == PIA_CATEGORIA_HRC)
+    if categoria["unidade"] != "Toneladas":
+        raise ValueError(f"unidade inesperada para a categoria PIA HRC: {categoria['unidade']!r} "
+                         f"(esperado 'Toneladas') - categoria/tabela pode ter mudado, revisar antes de usar")
+
+    variaveis = _get_json(IBGE_SIDRA_PIA_PRODUTO_URL,
+                          {"localidades": "N1[all]", "classificacao": f"1264[{PIA_CATEGORIA_HRC}]"})
+    series = {}
+    for var in variaveis:
+        serie = var["resultados"][0]["series"][0]["serie"]
+        series[str(var["id"])] = {int(ano): float(v) for ano, v in serie.items()}
+
+    out = pd.DataFrame({
+        "receita_liquida_mil_rs": pd.Series(series["864"]),
+        "quantidade_vendida_t": pd.Series(series["1982"]),
+    }).sort_index()
+    out.index.name = "ano"
+    out["preco_rs_t"] = out["receita_liquida_mil_rs"] * 1000.0 / out["quantidade_vendida_t"]
+    return out
+
+
+def denton_proporcional(indicador: pd.Series, alvos_anuais: pd.Series) -> pd.Series:
+    """Proportional Denton, variante de primeiras diferencas (IMF Quarterly
+    National Accounts Manual, cap. 6): distribui um indicador mensal em
+    torno de niveis anuais observados, preservando ao maximo o MOVIMENTO
+    relativo mes a mes do indicador - nunca um degrau/pro-rata simples na
+    fronteira do ano.
+
+    Minimiza:
+        sum_t [ x[t]/i[t] - x[t-1]/i[t-1] ]^2
+    sujeito a, para cada ano y:
+        sum(x[t] para t no ano y) == alvos_anuais[y] * (numero de meses de y em `indicador`)
+    (equivalente a mean(x[t] no ano y) == alvos_anuais[y]).
+
+    Resolvido via sistema linear KKT (numpy puro - sem scipy.optimize nem
+    biblioteca de disaggregation temporal; a matriz e pequena, algumas
+    dezenas de meses/restricoes no uso deste modulo).
+
+    `indicador`: Series mensal (index = mes, DatetimeIndex), estritamente
+    positiva, cobrindo EXATAMENTE os anos de `alvos_anuais` (nenhum mes
+    fora deles, nenhum ano de `alvos_anuais` ausente do indicador) - erro
+    explicito se nao cobrir, nunca completa em silencio.
+    `alvos_anuais`: Series indexada por ano (int).
+
+    Retorna Series mensal (mesmo index de `indicador`).
+    """
+    if indicador.empty or alvos_anuais.empty:
+        raise ValueError("indicador e alvos_anuais nao podem ser vazios")
+    if (indicador <= 0).any():
+        raise ValueError("indicador deve ser estritamente positivo (Denton proporcional divide por ele)")
+
+    anos_indicador = pd.Index(indicador.index.year)
+    anos_alvo = sorted(alvos_anuais.index)
+    if set(anos_indicador) != set(anos_alvo):
+        raise ValueError(
+            f"indicador e alvos_anuais devem cobrir exatamente os mesmos anos - "
+            f"indicador tem {sorted(set(anos_indicador))}, alvos_anuais tem {anos_alvo}")
+
+    n = len(indicador)
+    i = indicador.to_numpy(dtype=float)
+
+    diferenca = np.zeros((n - 1, n))
+    for k in range(n - 1):
+        diferenca[k, k] = -1.0
+        diferenca[k, k + 1] = 1.0
+    escala = np.diag(1.0 / i)
+    m_objetivo = escala @ diferenca.T @ diferenca @ escala  # (n, n), semidefinida positiva
+
+    restricao = np.zeros((len(anos_alvo), n))
+    alvo_vetor = np.zeros(len(anos_alvo))
+    for linha, ano in enumerate(anos_alvo):
+        mascara = (anos_indicador == ano)
+        restricao[linha, mascara] = 1.0
+        alvo_vetor[linha] = alvos_anuais.loc[ano] * mascara.sum()
+
+    zeros = np.zeros((len(anos_alvo), len(anos_alvo)))
+    kkt = np.block([[2.0 * m_objetivo, restricao.T], [restricao, zeros]])
+    lado_direito = np.concatenate([np.zeros(n), alvo_vetor])
+    solucao = np.linalg.solve(kkt, lado_direito)
+    return pd.Series(solucao[:n], index=indicador.index, name="preco_rs_t")
+
+
+def preco_domestico_hrc_pia_v2(pia_anual_df: pd.DataFrame | None = None,
+                               ipp_mensal: pd.Series | None = None) -> pd.DataFrame:
+    """Domestic Price HRC V2 - caminho PIA (Stage E10, decisao Level 3
+    aprovada em docs/research/hrc_domestic_price_sources.md): benchmarking
+    temporal (Proportional Denton) entre a ancora ANUAL da PIA-Produto
+    (`ibge_sidra_pia_hrc_anual`) e o movimento MENSAL do IPP 242-Siderurgia
+    (`ibge_sidra_ipp_siderurgia`, ja existente, reaproveitada sem
+    alteracao).
+
+    NAO substitui `preco_domestico_hrc_mensal_v2` (ancora corporativa
+    Usiminas+CSN) - os dois coexistem e NUNCA sao combinados por
+    splice/reancoragem (decisao Level 3: mix de produto diferente, sem
+    janela de sobreposicao suficiente para calibrar uma transicao). A
+    ancora corporativa so entra como benchmark de validacao externa,
+    calculada separadamente (scripts/gerar_domestic_price_hrc_pia_v2.py),
+    nunca dentro desta funcao.
+
+    Regras de cobertura (decisao Level 3):
+      - Anos da PIA SEM os 12 meses do IPP disponiveis nao geram serie
+        mensal artificial - ficam de fora do resultado (continuam
+        acessiveis via `ibge_sidra_pia_hrc_anual()` como benchmark anual
+        isolado, para validacao).
+      - Para a janela onde PIA anual + IPP mensal completo coexistem
+        (esperado ~2019-2023): serie mensal BENCHMARKED via
+        `denton_proporcional`. `is_provisional=False`.
+      - Apos o ultimo ano PIA observado: extensao PROVISIONAL - encadeia a
+        partir da ultima relacao preco-benchmarked/IPP observada (mesma
+        formula de encadeamento por variacao de indice ja usada em
+        `encadear_preco_domestico_mensal`, so que a partir do ultimo mes
+        Denton em vez de uma ancora trimestral direta). `is_provisional=True`.
+        NUNCA promovida a publication-grade automaticamente (decisao de
+        quem integra com o import side, fora desta funcao) e NUNCA
+        misturada silenciosamente com a janela benchmarked - a flag
+        `is_provisional` distingue as duas o tempo todo.
+      - `pia_reference_year` (ano da PIA que fundamenta aquele mes) e
+        preservado em toda linha - campo minimo necessario para, no
+        futuro, reprocessar os meses provisorios quando uma nova PIA sair
+        (mecanismo de revisao em si NAO implementado aqui - so o campo que
+        permite implementar depois, por instrucao explicita da decisao
+        Level 3).
+
+    PROPRIEDADE CONHECIDA (nao um bug, ver
+    tests/unit/test_preco_domestico_hrc_pia_v2.py::
+    test_janela_benchmarked_conjunta_pode_revisar_anos_antigos_quando_novo_ano_pia_e_somado):
+    o Denton e resolvido JUNTO para toda a janela benchmarked de uma vez
+    (para poder suavizar a fronteira entre anos - e o proprio motivo de
+    usar Denton em vez de pro-rata). Isso significa que, quando um NOVO
+    ano de PIA for publicado e a janela benchmarked reprocessada do zero,
+    meses de anos MAIS ANTIGOS podem mudar levemente perto da nova
+    fronteira - pratica padrao de temporal benchmarking (IMF QNA Manual
+    cap. 6), nao uma falha de look-ahead. A media anual de cada ano
+    continua batendo exatamente o alvo PIA daquele ano em qualquer
+    reprocessamento (essa e a garantia que nao muda). Ja a extensao
+    PROVISIONAL nunca olha para frente: cada mes provisional so depende do
+    ultimo mes benchmarked e do IPP ate aquele proprio mes, nunca de IPP
+    futuro (verificado em teste dedicado).
+
+    Toda linha mensal (benchmarked ou provisional) e uma estimativa
+    derivada de um nivel anual observado (a PIA em si, preservada em
+    `pia_anchor_price_rs_t`) - nenhuma e um dado bruto mensal observado,
+    entao `provenance_level=NIVEL_ESTIMADO` para todas (mesmo criterio ja
+    usado por `classificar_preco_domestico`: encadeado/interpolado =
+    ESTIMADO).
+
+    Saida mensal com: reference_period, preco_domestico_rs_t,
+    pia_reference_year, pia_anchor_price_rs_t, ipp_series_id,
+    provenance_level, is_proxy, proxy_reason, is_provisional,
+    validation_status.
+    """
+    cols = ["reference_period", "preco_domestico_rs_t", "pia_reference_year", "pia_anchor_price_rs_t",
+            "ipp_series_id", "provenance_level", "is_proxy", "proxy_reason", "is_provisional",
+            "validation_status"]
+    if pia_anual_df is None:
+        pia_anual_df = ibge_sidra_pia_hrc_anual()
+    if ipp_mensal is None:
+        ipp_mensal = ibge_sidra_ipp_siderurgia()
+
+    ipp_mensal = pd.to_numeric(ipp_mensal, errors="coerce").dropna().sort_index()
+    if ipp_mensal.empty or pia_anual_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    anos_ipp_completos = {ano for ano, g in ipp_mensal.groupby(ipp_mensal.index.year) if len(g) == 12}
+    anos_benchmarked = sorted(set(pia_anual_df.index) & anos_ipp_completos)
+    if not anos_benchmarked:
+        # nenhum ano com PIA + 12 meses de IPP disponiveis simultaneamente -
+        # nunca fabrica serie mensal so com um dos dois (regra explicita da
+        # decisao Level 3).
+        return pd.DataFrame(columns=cols)
+
+    primeiro_ano, ultimo_ano = min(anos_benchmarked), max(anos_benchmarked)
+    anos_esperados = set(range(primeiro_ano, ultimo_ano + 1))
+    if set(anos_benchmarked) != anos_esperados:
+        faltando = sorted(anos_esperados - set(anos_benchmarked))
+        raise ValueError(
+            f"janela PIA+IPP nao e continua entre {primeiro_ano} e {ultimo_ano} - "
+            f"ano(s) sem cobertura completa: {faltando}. Comportamento para buraco no meio da "
+            f"janela benchmarked nao foi decidido (escalar para Level 3 se isso ocorrer com dado real).")
+
+    indicador_bench = ipp_mensal.loc[f"{primeiro_ano}-01-01": f"{ultimo_ano}-12-31"]
+    alvos = pia_anual_df.loc[primeiro_ano:ultimo_ano, "preco_rs_t"]
+    precos_bench = denton_proporcional(indicador_bench, alvos)
+
+    linhas = pd.DataFrame({
+        "reference_period": indicador_bench.index,
+        "preco_domestico_rs_t": precos_bench.to_numpy(),
+        "pia_reference_year": indicador_bench.index.year,
+    })
+    linhas["pia_anchor_price_rs_t"] = linhas["pia_reference_year"].map(alvos)
+    linhas["is_provisional"] = False
+
+    ultimo_mes_bench = indicador_bench.index.max()
+    meses_provisionais = ipp_mensal.loc[ipp_mensal.index > ultimo_mes_bench]
+    if not meses_provisionais.empty:
+        preco_base = precos_bench.iloc[-1]
+        ipp_base = indicador_bench.iloc[-1]
+        precos_prov = preco_base * (meses_provisionais / ipp_base)
+        linhas_prov = pd.DataFrame({
+            "reference_period": meses_provisionais.index,
+            "preco_domestico_rs_t": precos_prov.to_numpy(),
+            "pia_reference_year": ultimo_ano,  # ultimo ano PIA que fundamenta a extensao
+            "pia_anchor_price_rs_t": float(alvos.loc[ultimo_ano]),
+            "is_provisional": True,
+        })
+        linhas = pd.concat([linhas, linhas_prov], ignore_index=True)
+
+    linhas["ipp_series_id"] = IPP_SIDERURGIA_SERIES_ID
+    linhas["provenance_level"] = NIVEL_ESTIMADO
+    linhas["is_proxy"] = True
+    linhas["proxy_reason"] = PROXY_REASON_DESTINATION_MIX
+    linhas["validation_status"] = VALIDACAO_VERIFICADO
+
+    return linhas[cols].sort_values("reference_period").reset_index(drop=True)
 
 
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
