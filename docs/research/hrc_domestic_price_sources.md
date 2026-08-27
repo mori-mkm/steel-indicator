@@ -322,3 +322,335 @@ decisão explícita de fonte/metodologia.
   HRC-específica da tabela SIDRA 7752 (achado novo desta pesquisa).
 - Nenhum arquivo de produção alterado. Nenhum `git add`/`commit`/`push`
   executado.
+
+---
+
+# Adendo (2026-08-26, mesmo dia) — exposição a exportação da PIA-Produto HRC
+
+Investigação Level 3 de continuação: fecha a validação pendente antes de
+decidir se a PIA-Produto 2422.2020 pode virar âncora oficial. **Não
+implementa nada** — `preco_domestico_hrc_mensal_v2()` e o CSV curado
+continuam inalterados.
+
+## 1. Conceito PIA — confirmado contra documentação oficial do IBGE
+
+Fonte: "Notas técnicas" oficiais da PIA-Produto (IBGE, *Pesquisa
+Industrial*, v.29 n.2, Produto, 2010 — mesmo desenho conceitual da tabela
+7752 atual, que reusa as mesmas variáveis 864/1982 confirmadas ao vivo).
+
+- **FACT** (citação verbatim): *"Quantidade vendida no ano - quantidade
+  total do produto vendido no ano, pela unidade local, independentemente
+  de ter sido produzido no ano ou na unidade local, desde que produzido
+  pela empresa"*. Nenhuma menção a mercado interno/externo.
+- **FACT** (citação verbatim): *"Vendas realizadas no ano - receita
+  líquida de vendas do produto no ano, inclusive a de produtos que são
+  fabricados em outras unidades locais da mesma empresa. Não inclui a
+  revenda de mercadorias adquiridas de outras empresas."*
+- **FACT** (citação verbatim, definição de receita líquida): *"receita
+  bruta das vendas de mercadorias produzidas pela empresa..., deduzidos
+  os impostos incidentes sobre estas vendas (os que guardam
+  proporcionalidade com valor de venda, tais como: ICMS, IPI, ISS,
+  PIS/Pasep, Cofins, Simples Nacional, etc.) e as vendas canceladas,
+  abatimentos e descontos incondicionais."*
+- **FACT**: em nenhum ponto do documento (7 páginas, conceituação
+  completa de variáveis investigadas e tabuladas) existe uma variável ou
+  quebra que separe mercado interno de exportação a nível de produto. A
+  pesquisa é objetivamente desenhada para TOTAL (interno + exportação
+  combinados) — confirmado pela ausência total de qualquer campo
+  correspondente, não inferido por omissão.
+- **FACT** (reforça a leitura acima): um dos dois objetivos declarados da
+  pesquisa (página 1) é *"Propiciar informações para a análise articulada
+  dos fluxos de produção interna e do comércio externo de produtos
+  industriais"* — ou seja, o próprio IBGE desenha a PIA-Produto para ser
+  **cruzada** com estatística de comércio exterior (Comex), não para já
+  vir separada internamente. Isso valida diretamente a abordagem usada
+  nesta pesquisa (cruzar com Comex Stat).
+- **FACT**: "Valor das vendas" tabulado corresponde a vendas realizadas
+  **diretamente pelas unidades locais produtivas industriais** — exclui
+  vendas de departamentos comerciais/administrativos separados. Boa
+  propriedade para comparabilidade com paridade de importação (nível
+  fábrica, não varejo).
+- **DOC** (não FACT — documento é da edição 2010; as edições 2014-2023 da
+  tabela 7752 usam as mesmas variáveis 864/1982, mas o texto conceitual
+  detalhado das edições mais recentes não foi acessado diretamente,
+  bloqueado por 403 em `ibge.gov.br`): assume-se, por estabilidade
+  histórica de desenho de pesquisa e por reuso do mesmo ID de variável,
+  que a definição não mudou entre 2010 e 2023 — não confirmado edição a
+  edição.
+- **UNKNOWN**: se a cobertura amostral (que já era 87% do total das
+  vendas industriais em 2010) mudou materialmente ano a ano dentro da
+  janela 2014-2023 especificamente para a classe siderúrgica.
+
+**Conclusão da seção**: confirmado que `quantidade_vendida`/`receita_
+líquida_de_vendas` da PIA-Produto são totais (mercado interno +
+exportação), não domésticos puros. A pergunta de materialidade (seção
+seguinte) é, portanto, real e não hipotética.
+
+## 2-3. Exposição a exportação — resultado quantitativo
+
+Cruzamento PIA-Produto (categoria 54849) × Comex Stat exportação (cesta
+`NCM_BOBINA_QUENTE`, 13 NCMs já validados pelo projeto; também calculado
+sem o código "com_relevo" 72081000 — resultado praticamente idêntico,
+diferença <0,1 p.p. em todos os anos, porque é um produto de nicho de
+baixo volume). Reproduzível via
+`scripts/research/pia_hrc_export_exposure.py`.
+
+Correspondência NCM↔Prodlist: **INFERENCE**, não FACT — não foi
+localizada uma tabela de correspondência oficial NCM↔Prodlist acessível
+nesta pesquisa (haveria um "Anexo" na publicação completa da PIA-Produto,
+não obtido). O raciocínio usado: os 13 NCMs de `NCM_BOBINA_QUENTE` cobrem
+faixas "decapada" (7208.25-27, decapagem é tratamento de superfície, não
+revestimento) e "não decapada" (7208.36-39) — nenhuma das duas envolve
+revestimento metálico/pintura, então ambas deveriam cair em "não
+revestidos" (2422.2020), não em "revestidos" (2422.2035/2422.2160). Só
+"com_relevo" (72081000, chapa xadrez) é fisicamente distinta e
+provavelmente cai num código Prodlist próprio não identificado aqui.
+
+**Resultado** (`export_share_qty = export_t / qtd_pia_t`, por ano):
+
+| Ano | Qtd. vendida PIA (t) | Export. Comex (t) | export\_share\_qty |
+|---|---|---|---|
+| 2014 | 4.621.070 | 1.131.808 | 24,5% |
+| 2015 | 4.696.041 | 2.001.077 | **42,6%** |
+| 2016 | 4.052.308 | 1.499.560 | 37,0% |
+| 2017 | 4.638.307 | 1.619.788 | 34,9% |
+| 2018 | 5.054.072 | 1.312.932 | 26,0% |
+| 2019 | 4.325.679 | 1.139.167 | 26,3% |
+| 2020 | 3.630.153 | 667.342 | 18,4% |
+| 2021 | 4.496.777 | 659.152 | 14,7% |
+| 2022 | 4.206.224 | 1.182.349 | 28,1% |
+| 2023 | 3.567.327 | 443.768 | **12,4%** |
+
+**Materialidade**: mínimo 12,4%, mediana 26,2%, máximo 42,6%. **Nenhum
+ano fica abaixo de 10%; 7 dos 10 anos ficam acima de 20%.** Correlação
+com o ano: -0,70 (tendência de queda moderada, não monotônica — pico em
+2015, mínimo em 2023, sem outlier formal por IQR). Isso está muito longe
+de desprezível: por definição do próprio critério da tarefa, a exposição
+cai quase sempre na faixa ">20%", nunca na faixa "<5%".
+
+## 4. Sensibilidade do preço doméstico — SOMENTE indicativa
+
+**Compatibilidade contábil avaliada, não assumida**: subtrair FOB
+(Comex, USD, na data de despacho aduaneiro) da receita líquida PIA (R$,
+reconhecida no ano-calendário de venda pela unidade local) tem três
+incompatibilidades reais, nenhuma delas resolvida nesta pesquisa:
+(a) câmbio usado é uma média anual simples, não a taxa efetiva de cada
+embarque; (b) possível descasamento de tempo entre venda reconhecida
+(PIA) e despacho aduaneiro (Comex) perto da virada do ano; (c) a
+"receita líquida" da PIA já é líquida de ICMS/IPI/PIS-Cofins só na parte
+doméstica (a parcela de exportação já é imune a esses tributos por
+desenho constitucional — não há dupla-contagem aí, mas não há garantia de
+que o valor faturado reconhecido pela empresa bate exatamente com o FOB
+declarado na exportação, que pode diferir por Incoterm, frete interno
+até o porto, ou entidade faturadora).
+
+Por isso, o cálculo abaixo é rotulado explicitamente **SENSIBILIDADE**,
+nunca oficial:
+
+```
+domestic_quantity_approx = qtd_pia_t - export_t
+domestic_revenue_approx  = receita_pia_rs - (export_fob_usd * cambio_medio_anual)
+preco_domestico_aprox    = domestic_revenue_approx / domestic_quantity_approx
+```
+
+| Ano | PIA blended (R$/t) | Export unit. (R$/t) | Aprox. doméstico (R$/t, SENSIBILIDADE) | Delta vs blended |
+|---|---|---|---|---|
+| 2014 | 1.757,59 | 1.328,60 | 1.896,75 | +7,9% |
+| 2015 | 1.474,99 | 1.380,93 | 1.544,83 | +4,7% |
+| 2016 | 1.560,70 | 1.273,95 | 1.729,15 | +10,8% |
+| 2017 | 1.896,30 | 1.619,06 | 2.045,06 | +7,8% |
+| 2018 | 2.234,10 | 2.202,22 | 2.245,29 | +0,5% |
+| 2019 | 2.406,92 | 1.936,40 | 2.575,13 | +7,0% |
+| 2020 | 2.840,67 | 2.475,75 | 2.922,86 | +2,9% |
+| 2021 | 5.644,69 | 4.926,39 | 5.768,07 | +2,2% |
+| 2022 | 5.393,31 | 4.390,17 | 5.785,55 | +7,3% |
+| 2023 | 4.844,33 | 3.735,43 | 5.001,87 | +3,3% |
+
+**Leitura qualitativa** (a única com confiança suficiente para este
+nível de dado): em **todos os 10 anos**, o preço unitário de exportação
+ficou abaixo do preço PIA combinado (interno+exportação) — ou seja, as
+exportações de HRC saíram consistentemente mais baratas que a média
+combinada, e por isso remover o volume/receita de exportação **empurra o
+preço doméstico aproximado para CIMA** do preço PIA combinado (nunca para
+baixo), em magnitude que varia de +0,5% a +10,8% conforme o ano — sem
+padrão fixo (reforça por que um desconto fixo nunca seria defensável).
+**Não vira série oficial.** Serve só como indicador de direção e de
+risco: o preço PIA bruto (sem ajuste) já é, se algo, um **piso**
+conservador da leitura doméstica pura, não um teto.
+
+## 5. Comparação com referências
+
+**Limitação honesta de sobreposição temporal**: PIA cobre 2014-2023;
+os benchmarks externos (Argus/SteelOrbis, adendo anterior) e a âncora
+corporativa V2 cobrem só 2025-2026. **Não existe nenhum ano em comum
+entre as três fontes** — qualquer comparação de nível cruza um hiato de
+pelo menos 2 anos e não isola tendência de câmbio/ciclo de preço do
+período entre elas. Reportado explicitamente para não fingir uma
+comparação mais direta do que ela é.
+
+Com essa ressalva: PIA 2023 (último ano disponível) = R$4.844/t
+(combinado) a R$5.002/t (aproximação doméstica, SENSIBILIDADE). A âncora
+corporativa V2 2025Q2-2026Q2 = R$4.951-5.378/t. Os benchmarks externos
+HRC-específicos de 2025-2026 (Argus/SteelOrbis) = R$3.600-4.560/t. **A
+leitura PIA (mesmo a versão bruta, sem ajuste de exportação) fica entre
+os dois** — mais alta que os benchmarks comerciais recentes, mais baixa
+que a âncora corporativa recente — o que é consistente com a hipótese
+de que a âncora corporativa "Siderurgia" está inflada por mix de produto
+(achado do adendo anterior) e que a PIA (produto-específica, mas
+destino-misto) fica estruturalmente entre as duas leituras. Não dá para
+separar quanto do gap é ciclo temporal (2023→2025-26) e quanto é mix de
+produto sem mais dados — mas a ordenação (comercial < PIA < corporativo)
+é o que se esperaria se ambas as hipóteses (mix de produto na âncora
+corporativa, mix de destino na PIA) forem parcialmente verdadeiras ao
+mesmo tempo, não mutuamente excludentes.
+
+**Veredito da seção**: o preço PIA HRC parece **(a) próximo do mercado
+doméstico em ordem de grandeza**, mas com evidência clara (seção 2-3) de
+que uma fração material e variável (12-43%) do volume/receita é
+exportação, precificada sistematicamente abaixo da média combinada — não
+é **(c)** estruturalmente inconsistente (os níveis são plausíveis e
+seguem o ciclo conhecido do aço), mas também não é seguro afirmar que
+está **isento** de viés **(b) puxado para exportação**: o viés existe e
+tem direção conhecida (puxa o combinado para BAIXO do doméstico puro),
+só não tem magnitude precisa o bastante para corrigir com confiança.
+
+## 6. Decisão sobre as opções
+
+**OPTION A (usar PIA HRC diretamente como âncora, sem qualificação) —
+NÃO RECOMENDADA.** A exposição a exportação é material e variável
+(12-43%, mediana 26,2%) — longe de desprezível. Tratar a série como
+"preço doméstico" sem qualificação seria uma afirmação não sustentada
+pela evidência.
+
+**OPTION B (PIA HRC pode ser âncora, mas permanece PROXY por misturar
+destino doméstico/exportação) — RECOMENDADA.** Espelha exatamente como o
+projeto já trata a âncora corporativa hoje (PROXY por mix de produto) —
+mesma disciplina, motivo diferente (mix de destino, não mix de produto).
+A vantagem real da PIA sobre a âncora corporativa atual (especificidade
+de produto: HRC genuíno, não "Siderurgia" inteira) permanece válida e
+não é anulada pela ressalva de exportação — só significa que PIA precisa
+de SEU PRÓPRIO selo de PROXY, com motivo documentado, não um selo
+herdado do mix de produto que ela justamente resolve.
+
+**OPTION C (só benchmark de validação, nunca âncora) — alternativa mais
+conservadora, também defensável**, especialmente dado o hiato temporal
+da seção 5 (nenhum ano em comum com o período atualmente publicável).
+
+**OPTION D (algum ajuste de exportação defensável) — NÃO RECOMENDADA
+AGORA.** A seção 4 mostra que um ajuste é qualitativamente coerente
+(direção sempre a mesma) mas não tem precisão suficiente (câmbio médio
+anual em vez de mensal/por-embarque, sem confirmação de que receita PIA
+e FOB Comex são estritamente comparáveis linha a linha) nem estabilidade
+(a fração de exportação varia de 12% a 43% sem tendência limpa) para virar
+um ajuste oficial. Fica registrado como direção de pesquisa futura, não
+como opção pronta para implementar.
+
+## PROPOSED DOMESTIC PRICE ARCHITECTURE (avaliação, seção 7 da tarefa)
+
+Arquitetura proposta pela tarefa: PIA-Produto HRC anual → âncora de
+nível → IPP 242-Siderurgia mensal → interpolação/extrapolação mensal,
+com reancoragem quando novo ano PIA sair.
+
+**Avaliação — parcialmente defensável, com duas ressalvas reais:**
+
+1. **O mecanismo em si não é novo**: encadear um nível confirmado por
+   IPP até a próxima confirmação é exatamente o que
+   `encadear_preco_domestico_mensal` já faz hoje para a âncora trimestral
+   corporativa (ADR 0002, já aprovado). Aplicar o mesmo mecanismo a uma
+   âncora anual em vez de trimestral não é uma técnica estatística nova
+   — é o mesmo método em cadência mais longa. Defensável nesse sentido.
+2. **Mas a resolução piora**: hoje, dentro do trimestre confirmado, o
+   nível fica constante por 3 meses antes de qualquer encadeamento. Com
+   âncora ANUAL, o nível ficaria constante por até 12 meses antes de
+   qualquer variação de IPP — perde granularidade dentro do próprio ano
+   observado, não só no período extrapolado. Deveria ser declarado
+   explicitamente como uma característica da âncora anual, não escondido.
+3. **Defasagem de ~2 anos muda o caráter da série**: a PIA 2023 só foi
+   divulgada em meados de 2025. Isso significa que, para QUALQUER mês
+   recente/atual, a PIA nunca vai estar "confirmada" a tempo — o mês mais
+   recente estaria sempre em extrapolação IPP de um nível de pelo menos
+   1-2 anos atrás, um horizonte de extrapolação muito mais longo que o
+   caso trimestral de hoje (tipicamente 0-3 meses de hold-flat/IPP antes
+   do próximo trimestre confirmar). Isso não invalida a arquitetura para
+   HISTÓRICO PROFUNDO, mas a torna estruturalmente inadequada como fonte
+   PRINCIPAL para os meses mais recentes/atuais — recomenda-se
+   explicitamente um desenho **híbrido**: PIA-âncora (com IPP) para o
+   período histórico já coberto pela PIA (2014-2023, alinhado com a
+   janela `EXPERIMENTAL` de política de importação já definida em
+   ADR 0009 para 2012-01 a 2022-03), e âncora corporativa trimestral
+   (Usiminas+CSN) para 2022-04 em diante (alinhado com a janela
+   `PUBLICATION_GRADE` já definida no mesmo ADR) — reaproveitando a
+   mesma filosofia de duas trilhas que o projeto já usa para política
+   comercial, em vez de forçar uma fonte única para todo o histórico.
+4. **Revisão retroativa não tem mecanismo hoje**: "quando novo ano PIA
+   for divulgado, reancorar/revisar meses provisórios" implica revisar
+   PUBLICADOS já emitidos. O projeto tem taxonomia de proveniência
+   (OBSERVADO/CALCULADO/ESTIMADO/PROXY, vintage/cutoff) mas **não** um
+   mecanismo de republicação/revisão de `reference_period` já publicado
+   — isso seria uma decisão de design nova (como versionar, como
+   comunicar a revisão, se republica silenciosamente ou gera um vintage
+   novo), não uma consequência automática de adotar a PIA. Fica como
+   questão em aberto, não resolvida aqui.
+
+**Veredito**: estatisticamente defensável como MECANISMO (reusa técnica
+já aprovada), mas só recomendável na variante HÍBRIDA (item 3) e só após
+uma decisão própria sobre revisão retroativa (item 4) — não como
+substituição direta e completa da âncora corporativa atual em toda a
+janela.
+
+## EXPECTED HISTORICAL COVERAGE (seção 8 da tarefa)
+
+Se adotada a arquitetura híbrida (PIA 2014-2022-03 + corporativa
+2022-04+):
+
+- **Primeira data mensal possível**: 2014-01 (mesmo início da cobertura
+  PIA/Comex usada nesta pesquisa; tecnicamente a série PIA-Produto existe
+  desde 1998, mas a tabela SIDRA 7752 atual só disponibiliza 2014-2023 —
+  cobertura anterior exigiria uma tabela SIDRA diferente/descontinuada,
+  não investigada aqui).
+- **Último mês com âncora PIA observada**: 2023-12 (ou 2022-03, se o
+  corte for alinhado à fronteira `EXPERIMENTAL`/`PUBLICATION_GRADE` já
+  aprovada, deixando 2022-04 em diante inteiramente a cargo da âncora
+  corporativa).
+- **Meses extrapolados/provisórios (se PIA fosse usada isoladamente, sem
+  a variante híbrida)**: de 2024-01 até o mês corrente — hoje isso já
+  seriam mais de 30 meses de extrapolação/hold-flat sobre um nível de
+  pelo menos 2 anos de idade, crescendo a cada mês até a próxima PIA
+  sair. Reforça por que a variante híbrida (§7) é a recomendável, não a
+  PIA isolada cobrindo tudo.
+- **Quanto a cobertura melhora vs. os 15 meses atuais**: potencialmente
+  muito — de 15 meses (2025-04 a 2026-06) para até ~110 meses (2014-01 a
+  2026-06), a maior parte com `publication_status=EXPERIMENTAL` (2014-01
+  a 2022-03, alinhado ao lado de importação, que já é `EXPERIMENTAL`
+  nessa janela por ADR 0009) e uma fração menor `PUBLICATION_GRADE`
+  (2022-04 em diante, sujeita à curadoria trimestral ainda pendente,
+  seção anterior deste documento). **2014→presente é alcançável em
+  princípio** para a trilha `EXPERIMENTAL` — não é um teto teórico, é uma
+  combinação de fonte já existente (PIA, Comex) com decisão de design
+  ainda pendente (adotar a arquitetura híbrida, decidir revisão
+  retroativa).
+
+## IMPLEMENTATION BLOCKED (adendo)
+
+Tudo que já estava bloqueado no adendo anterior continua bloqueado. Além
+disso, especificamente por esta investigação:
+
+- Qualquer subtração FOB-de-receita-PIA como número oficial (a coluna
+  `preco_domestico_aprox_rs_t_SENSIBILIDADE` é só leitura de risco, nunca
+  entra em cálculo publicado).
+- Qualquer arquitetura PIA+IPP (híbrida ou não) implementada sem decisão
+  explícita sobre revisão retroativa de `reference_period` já publicado.
+- Qualquer promoção da janela 2014-2022-03 a `PUBLICATION_GRADE` — se
+  adotada, essa janela nasceria `EXPERIMENTAL`, alinhada à mesma
+  classificação já aprovada para o lado de importação nesse período
+  (ADR 0009), não `PUBLICATION_GRADE`.
+- Confirmação da correspondência exata NCM↔Prodlist 2422.2020 (hoje
+  INFERENCE, não FACT) antes de qualquer uso além de indicador de
+  materialidade.
+
+## Artefato desta investigação
+
+- `scripts/research/pia_hrc_export_exposure.py` — reproduz o cruzamento
+  PIA×Comex export e a tabela de sensibilidade completa; salva
+  `data/processed/pia_hrc_export_exposure.csv` (gitignored, como o resto
+  de `data/processed/`).
