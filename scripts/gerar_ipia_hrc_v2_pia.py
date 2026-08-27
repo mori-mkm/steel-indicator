@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage E11/G2: gera a serie IPIA-HRC V2 PIA-based, integrando o import
-side bottom-up multi-NCM (Stage E7, ja aprovado) com o Domestic Price V2
-caminho PIA (Stage E10/ADR 0010, ja aprovado) via
-`indices_setoriais.calcular_ipia_hrc_v2_pia()` (Stage E11/ADR 0011),
-incluindo o quarto status PROVISIONAL e a separacao explicita entre saida
-oficial e provisional (`separar_ipia_hrc_v2_oficial_provisional`), e
-persiste cada execucao como uma vintage append-only/imutavel (Stage
-G2/ADR 0012 - `indices_setoriais.salvar_vintage_ipia_hrc_v2`).
+"""Stage E11/G2/G5: gera a serie IPIA-HRC PIA-based e persiste cada
+execucao como uma vintage append-only/imutavel, chamando a orquestracao
+CANONICA `indices_setoriais.executar_pipeline_ipia_hrc()` (Stage G5) - o
+MESMO caminho que a CLI oficial (`python src/indices_setoriais.py --ipia`)
+usa. Este script nao reimplementa fetch, freeze, calculo, separacao
+oficial/provisional nem persistencia de vintage - so orquestra a chamada e
+adiciona relatorios/artefatos ANALITICOS extras (grafico de validacao,
+comparacao com a ancora corporativa) que nao fazem parte do contrato de
+publicacao em si.
 
-NAO e codigo de producao/publicacao: gera artefatos analiticos de
-VALIDACAO (2 CSVs "latest" + grafico + vintage local), nao o relatorio
-PDF oficial. Nao altera `--selftest`, a CLI principal, `report_builder.py`
-nem nenhum caminho legado - mesmo status dos demais scripts
-scripts/gerar_*.py.
+NAO e codigo de producao/publicacao por conta propria - e um consumidor do
+mesmo pipeline que a CLI usa, com extras de validacao. Nao altera
+`--selftest`, `report_builder.py` nem nenhum caminho legado.
 
-Fluxo normal (Stage G2): se ja existir uma vintage anterior, este script
-carrega automaticamente o official.csv dela e usa como `congelado_df` -
-meses ja publicados como oficiais permanecem congelados. A PRIMEIRA
-execucao (sem vintage anterior) roda sem congelado_df.
+Fluxo normal (Stage G2/G5): se ja existir uma vintage anterior, o
+pipeline canonico carrega automaticamente o official.csv dela e usa como
+`congelado_df` - meses ja publicados como oficiais permanecem congelados.
+A PRIMEIRA execucao (sem vintage anterior) roda sem congelado_df.
 
 Uso:
     python scripts/gerar_ipia_hrc_v2_pia.py
@@ -29,18 +28,14 @@ Produz:
     data/processed/ipia_hrc_v2_pia_validation.png (LATEST - sobrescrito a cada execucao)
     data/processed/vintages/ipia_hrc_v2/<vintage_id>/  (IMUTAVEL - nunca sobrescrito)
 
-Faz chamadas de rede reais (Comex Stat, BCB/SGS, IBGE/SIDRA). Mesmo
-workaround de janela segura do BCB SGS (<=10 anos por pedaco) ja usado em
-scripts/gerar_serie_ipia_hrc_v2.py, reaproveitado aqui sem alteracao.
+Faz chamadas de rede reais (Comex Stat, BCB/SGS, IBGE/SIDRA).
 """
 from __future__ import annotations
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import numpy as np
 import pandas as pd
 
 import indices_setoriais as m
@@ -50,64 +45,7 @@ from steel_indicator.parameters.trade_policy import (
 
 STATUS_PROVISIONAL = m.STATUS_PROVISIONAL
 
-ANO_INI, ANO_FIM = 2012, 2026
-CSV_OFICIAL = "data/processed/ipia_hrc_v2_official.csv"
-CSV_PROVISIONAL = "data/processed/ipia_hrc_v2_provisional.csv"
 PNG_SAIDA = "data/processed/ipia_hrc_v2_pia_validation.png"
-VINTAGE_BASE_DIR = m.VINTAGE_BASE_DIR_PADRAO
-
-
-def _agora_utc_iso() -> str:
-    return pd.Timestamp.now(tz="UTC").isoformat()
-
-
-def _buscar_comex_bruto_com_retry(tentativas: int = 4, espera_s: float = 20.0) -> pd.DataFrame:
-    """Identico em espirito a scripts/gerar_serie_ipia_hrc_v2.py::
-    _buscar_comex_bruto_com_retry - a Comex Stat aplica rate limit (429)
-    real; espera mais longa entre tentativas resolveu na pratica."""
-    ultimo_erro = None
-    for tentativa in range(tentativas):
-        try:
-            return m._comex_bobina_bruto(ANO_INI, ANO_FIM)
-        except Exception as e:
-            ultimo_erro = e
-            print(f"  tentativa {tentativa + 1}/{tentativas} falhou ({e}); aguardando {espera_s:.0f}s...")
-            time.sleep(espera_s)
-    raise RuntimeError(f"Nao foi possivel buscar dado bruto do Comex Stat apos {tentativas} tentativas") from ultimo_erro
-
-
-def _cambio_historico_seguro_10anos(ano_ini: int, ano_fim: int) -> pd.Series:
-    """Identico a scripts/gerar_serie_ipia_hrc_v2.py::_cambio_historico_seguro_10anos."""
-    url = m.SGS_URL.format(cod=m.SGS["cambio_venda"])
-    corte = ano_ini + 6
-    janelas = [(f"01/01/{ano_ini}", f"31/12/{corte}"), (f"01/01/{corte + 1}", f"31/12/{ano_fim}")]
-    pedacos = []
-    for ini, fim in janelas:
-        dados = m._get_json(url, {"dataInicial": ini, "dataFinal": fim})
-        pdf = pd.DataFrame(dados)
-        pdf["data"] = pd.to_datetime(pdf["data"], format="%d/%m/%Y")
-        pdf["valor"] = pd.to_numeric(pdf["valor"], errors="coerce")
-        pedacos.append(pdf.set_index("data")["valor"])
-    cambio = pd.concat(pedacos).sort_index()
-    return cambio[~cambio.index.duplicated(keep="last")]
-
-
-def gerar_import_side_2012_2026(df_bruto: pd.DataFrame) -> pd.DataFrame:
-    """Identico em tecnica a scripts/gerar_serie_ipia_hrc_v2.py::
-    gerar_import_side_2012_2026 - troca `sgs` por cambio ja buscado em
-    pedacos seguros so durante a chamada, e usa domestico "curinga" para
-    nao deixar `agregar_ipia_hrc_multi_ncm_mensal` recortar o import side
-    pelo preco domestico legado antes do merge real com a PIA."""
-    cambio_completo = _cambio_historico_seguro_10anos(ANO_INI, ANO_FIM)
-    domestico_curinga = pd.DataFrame(
-        {"preco_rs_t": 1.0}, index=pd.date_range(f"{ANO_INI}-01-01", f"{ANO_FIM}-12-01", freq="MS"))
-    sgs_original = m.sgs
-    m.sgs = lambda codigo, inicio="01/01/2010": cambio_completo
-    try:
-        return m.agregar_ipia_hrc_multi_ncm_mensal(
-            ano_ini=ANO_INI, ano_fim=ANO_FIM, df_bruto=df_bruto, domestico_df=domestico_curinga)
-    finally:
-        m.sgs = sgs_original
 
 
 def reportar_oficial(oficial: pd.DataFrame) -> None:
@@ -147,23 +85,17 @@ def reportar_provisional(provisional: pd.DataFrame) -> None:
 
 def comparar_com_ipia_corporate(serie: pd.DataFrame, ppi_mensal: pd.DataFrame) -> None:
     """Compara o novo IPIA PIA-based (todos os status calculaveis, oficial
-    + provisional) com o IPIA-HRC V2 corporate antigo
-    (`calcular_serie_ipia_hrc_v2`, ancora Usiminas+CSN) nos meses
-    sobrepostos - quantifica quanto a correcao de product-mix (PIA
-    especifica de HRC vs. ancora corporativa "Siderurgia") altera o nivel.
-    Comparacao/diagnostico, nunca recalibracao.
-
-    Reaproveita `ppi_mensal` (ja calculado acima, import side 2012-2026)
-    em vez de deixar `calcular_serie_ipia_hrc_v2()` recalcula-lo sozinho -
-    isso evitaria o mesmo problema de janela do BCB SGS (>10 anos) que
-    `gerar_import_side_2012_2026` ja contorna acima; passar o import side
-    pronto pula esse caminho por completo (mesmo padrao de injecao de
-    dado ja pronto usado no resto do modulo)."""
-    print("\n=== Comparacao: novo IPIA PIA-based vs. IPIA-HRC V2 corporate (ancora antiga) ===")
+    + provisional) com o IPIA-HRC Corporate Benchmark antigo
+    (`calcular_serie_ipia_hrc_v2`, ancora Usiminas+CSN, interno/deprecated
+    - ADR 0013) nos meses sobrepostos - quantifica quanto a correcao de
+    product-mix (PIA especifica de HRC vs. ancora corporativa
+    "Siderurgia") altera o nivel. Comparacao/diagnostico, nunca
+    recalibracao - nunca entra no calculo oficial."""
+    print("\n=== Comparacao: IPIA-HRC PIA-based vs. IPIA-HRC Corporate Benchmark (interno/deprecated) ===")
     try:
         corporate = m.calcular_serie_ipia_hrc_v2(ppi_mensal_df=ppi_mensal)
     except Exception as e:
-        print(f"  nao foi possivel calcular o IPIA corporate ao vivo ({e}) - pulando comparacao")
+        print(f"  nao foi possivel calcular o benchmark corporativo ao vivo ({e}) - pulando comparacao")
         return
     corp_valido = corporate.dropna(subset=["ipia_hrc_v2"])
     pia_valido = serie.dropna(subset=["ipia_hrc_v2"])
@@ -178,7 +110,7 @@ def comparar_com_ipia_corporate(serie: pd.DataFrame, ppi_mensal: pd.DataFrame) -
         return
     comp["delta_pct"] = comp["ipia_hrc_v2"] / comp["ipia_corporate"] - 1.0
     print(f"  meses sobrepostos: {len(comp)}")
-    print(f"  delta_pct medio (PIA vs corporate): {comp['delta_pct'].mean() * 100:+.2f}%")
+    print(f"  delta_pct medio (PIA-based vs corporate): {comp['delta_pct'].mean() * 100:+.2f}%")
     print(f"  delta_pct desvio-padrao: {comp['delta_pct'].std() * 100:.2f}pp")
     print(comp[["reference_period", "ipia_hrc_v2", "ipia_corporate", "delta_pct"]].to_string(index=False))
 
@@ -226,8 +158,8 @@ def gerar_grafico_validacao(serie: pd.DataFrame, caminho_png: str) -> None:
 
     ax.axhline(100.0, color="black", linewidth=0.8, linestyle="--", label="paridade (100)")
     ax.set_xlabel("Mes (reference_period)")
-    ax.set_ylabel("IPIA-HRC V2 (PIA-based)")
-    ax.set_title("IPIA-HRC V2 PIA-based - OFFICIAL (solido) vs PROVISIONAL (tracejado) - VALIDACAO ANALITICA")
+    ax.set_ylabel("IPIA-HRC (PIA-based)")
+    ax.set_title("IPIA-HRC - OFFICIAL (solido) vs PROVISIONAL (tracejado) - VALIDACAO ANALITICA")
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
     fig.savefig(caminho_png, dpi=120)
@@ -269,72 +201,39 @@ def reportar_vintage(manifest: dict, vintage_anterior: dict | None,
 
 
 def main() -> None:
-    fetch_at_utc: dict[str, str] = {}
-
-    vintage_anterior = None
-    ultima = m.ultima_vintage_ipia_hrc_v2(base_dir=VINTAGE_BASE_DIR)
-    if ultima is not None:
-        print(f"=== Vintage anterior encontrada: {ultima} ===")
-        vintage_anterior = m.carregar_vintage_ipia_hrc_v2(ultima, base_dir=VINTAGE_BASE_DIR)
-        print(f"  official anterior: {len(vintage_anterior['official'])} meses "
-              f"({vintage_anterior['manifest']['coverage']['official_first_period']} -> "
-              f"{vintage_anterior['manifest']['coverage']['official_last_period']}) - "
-              f"sera usado como congelado_df no fluxo normal")
+    vintage_anterior_id = m.ultima_vintage_ipia_hrc_v2()
+    if vintage_anterior_id is not None:
+        print(f"=== Vintage anterior encontrada: {vintage_anterior_id} ===")
     else:
         print("=== Nenhuma vintage anterior - esta sera a PRIMEIRA vintage ===")
 
-    print(f"\n=== Buscando dado bruto do Comex Stat ({ANO_INI}-{ANO_FIM}) ===")
-    fetch_at_utc["comex_fetch_at_utc"] = _agora_utc_iso()
-    df_bruto = _buscar_comex_bruto_com_retry()
-    print(f"  {len(df_bruto)} linhas brutas")
+    print("\n=== Executando pipeline canonico do IPIA-HRC (fetch + calculo + persistencia) ===")
+    resultado = m.executar_pipeline_ipia_hrc()
+    serie = resultado["serie"]
+    oficial = resultado["oficial"]
+    provisional = resultado["provisional"]
+    manifest = resultado["manifest"]
 
-    print("\n=== Import side V2 (bottom-up multi-NCM) ===")
-    fetch_at_utc["bcb_fetch_at_utc"] = _agora_utc_iso()  # cambio/PTAX, buscado dentro desta chamada
-    ppi_mensal = gerar_import_side_2012_2026(df_bruto)
-    print(f"  {len(ppi_mensal)} meses calculaveis (com dado Comex no periodo)")
-
-    print("\n=== Domestic Price V2 - caminho PIA ===")
-    fetch_at_utc["pia_fetch_at_utc"] = _agora_utc_iso()
-    pia = m.ibge_sidra_pia_hrc_anual()
-    fetch_at_utc["ipp_fetch_at_utc"] = _agora_utc_iso()
-    ipp = m.ibge_sidra_ipp_siderurgia()
-    preco_domestico_pia = m.preco_domestico_hrc_pia_v2(pia_anual_df=pia, ipp_mensal=ipp)
-    print(f"  {len(preco_domestico_pia)} meses "
-          f"({int((~preco_domestico_pia['is_provisional']).sum())} benchmarked, "
-          f"{int(preco_domestico_pia['is_provisional'].sum())} provisional)")
-
-    print("\n=== Integrando IPIA-HRC V2 PIA-based ===")
-    congelado_df = vintage_anterior["official"] if vintage_anterior is not None else None
-    serie = m.calcular_ipia_hrc_v2_pia(ppi_mensal_df=ppi_mensal, pia_domestico_df=preco_domestico_pia,
-                                       congelado_df=congelado_df)
     print(f"  {len(serie)} meses no output completo (todos os 4 status, antes de separar oficial/provisional)")
-
-    oficial, provisional = m.separar_ipia_hrc_v2_oficial_provisional(serie)
-
-    # LATEST outputs (comportamento ja existente, preservado sem alteracao -
-    # sobrescritos a cada execucao, sempre representam a leitura mais
-    # recente; a copia IMUTAVEL correspondente vive na pasta da vintage).
-    os.makedirs(os.path.dirname(CSV_OFICIAL), exist_ok=True)
-    oficial.to_csv(CSV_OFICIAL, index=False)
-    provisional.to_csv(CSV_PROVISIONAL, index=False)
-    print(f"\nCSV oficial (latest) salvo em:      {CSV_OFICIAL}")
-    print(f"CSV provisional (latest) salvo em:  {CSV_PROVISIONAL}")
+    print(f"\nCSV oficial (latest) salvo em:      {resultado['csv_oficial']}")
+    print(f"CSV provisional (latest) salvo em:  {resultado['csv_provisional']}")
+    print(f"  vintage criada em: {m.VINTAGE_BASE_DIR_PADRAO}/{m.VINTAGE_PRODUTO_IPIA_HRC_V2}/{manifest['vintage_id']}")
+    print(f"  hashes: OK ({len(manifest['hashes'])} arquivo(s))")
 
     gerar_grafico_validacao(serie, PNG_SAIDA)
     print(f"Grafico de validacao (latest) salvo em: {PNG_SAIDA}")
 
-    print("\n=== Persistindo vintage imutavel ===")
-    manifest = m.salvar_vintage_ipia_hrc_v2(
-        serie, import_side_df=ppi_mensal, domestic_price_df=preco_domestico_pia,
-        vintage_anterior=vintage_anterior, base_dir=VINTAGE_BASE_DIR, sources_fetch_at_utc=fetch_at_utc)
-    vintage_nova = m.carregar_vintage_ipia_hrc_v2(manifest["vintage_id"], base_dir=VINTAGE_BASE_DIR)
-    print(f"  vintage criada em: {VINTAGE_BASE_DIR}/{m.VINTAGE_PRODUTO_IPIA_HRC_V2}/{manifest['vintage_id']}")
-    print(f"  hashes: OK ({len(manifest['hashes'])} arquivo(s))")
-
     reportar_oficial(oficial)
     reportar_provisional(provisional)
-    reportar_vintage(manifest, vintage_anterior, vintage_nova["official"], vintage_nova["provisional"])
-    comparar_com_ipia_corporate(serie, ppi_mensal)
+    reportar_vintage(manifest, resultado["vintage_anterior"], oficial, provisional)
+
+    # comparacao com o benchmark corporativo reusa o import side ja
+    # calculado no pipeline (evitando recalcula-lo/rebuscar Comex/BCB) -
+    # `resultado["ppi_mensal_df"]` e devolvido diretamente pelo pipeline,
+    # nunca recarregado da vintage via base_dir default (evitaria um
+    # descasamento se o pipeline tivesse rodado contra um base_dir
+    # diferente do default).
+    comparar_com_ipia_corporate(serie, resultado["ppi_mensal_df"])
 
 
 if __name__ == "__main__":

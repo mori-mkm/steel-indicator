@@ -1079,8 +1079,11 @@ novo).
   e `src/indices_setoriais.py` (`calcular_revised`,
   `preparar_series_para_vintage`, `salvar_vintage_ipia_hrc_v2`,
   `carregar_vintage_ipia_hrc_v2`, `listar_vintages_ipia_hrc_v2`,
-  `ultima_vintage_ipia_hrc_v2`). Não conectado a `--selftest`/CLI/
-  relatório oficial nesta stage — mesmo status dos demais caminhos V2.
+  `ultima_vintage_ipia_hrc_v2`). **Conectado à CLI a partir do Stage G5**
+  (`python src/indices_setoriais.py --ipia` publica; `--ipia-latest` lê a
+  última vintage sem rede) via a orquestração canônica
+  `executar_pipeline_ipia_hrc()` — não conectado ao relatório PDF ainda
+  (fora de escopo do Stage G5; `--pdf-ipia` continua no caminho legado).
   Migração futura para object storage/banco é possível (o layout
   `<produto>/<vintage_id>/` + manifest não impede isso), mas não
   implementada agora.
@@ -1203,8 +1206,12 @@ Com os quatro itens acima fechados ou não-aplicáveis **especificamente para
 IPIA-HRC, janela 2019-02–presente**, o IPIA-HRC deixa de estar bloqueado
 por `docs/METODOLOGIA.md` §15 nessa janela. Isso não substitui os demais
 critérios de publication-readiness (proxy do domestic, disclosure, política
-de baixa liquidez — ver ADR 0013) nem autoriza wiring de CLI/PDF, que
-permanece decisão separada.
+de baixa liquidez — ver ADR 0013).
+
+**Atualização (Stage G5):** o wiring de CLI (`--ipia`/`--ipia-latest`) foi
+implementado — ver §12.12 acima e a orquestração canônica
+`executar_pipeline_ipia_hrc()`. O wiring do relatório PDF permanece fora
+de escopo (decisão separada, ainda não feita).
 
 ---
 

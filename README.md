@@ -452,22 +452,30 @@ data/processed/serie_domestico_aco.csv
 
 ---
 
-### Calcular o IPIA
+### Publicar o IPIA-HRC
 
 ```bash
 python src/indices_setoriais.py --ipia
 ```
 
-Gera:
+Busca as fontes, calcula o IPIA-HRC (PIA-based), separa OFFICIAL/PROVISIONAL,
+persiste uma nova vintage imutável em `data/processed/vintages/ipia_hrc_v2/`
+e atualiza:
 
 ```text
-data/processed/ipia_mensal.csv
+data/processed/ipia_hrc_v2_official.csv
+data/processed/ipia_hrc_v2_provisional.csv
 ```
 
-Também é possível alterar o período:
+`--ano-ini`/`--ano-fim` não se aplicam a este comando — a janela de fetch e
+a janela de publicação já são fixadas pelo pipeline aprovado (ver
+`docs/adr/0013-ipia-hrc-publication-contract.md`).
+
+Para ver a última publicação já existente sem consultar as fontes de novo
+(sem rede, sem criar vintage nova):
 
 ```bash
-python src/indices_setoriais.py --ipia --ano-ini 2020 --ano-fim 2026
+python src/indices_setoriais.py --ipia-latest
 ```
 
 ---

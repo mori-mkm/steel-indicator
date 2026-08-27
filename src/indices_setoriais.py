@@ -2372,6 +2372,228 @@ def ultima_vintage_ipia_hrc_v2(base_dir: str = VINTAGE_BASE_DIR_PADRAO) -> Optio
     return vintage_store.ultima_vintage(base_dir, VINTAGE_PRODUTO_IPIA_HRC_V2)
 
 
+# =============================================================================
+# 3i. IPIA-HRC - orquestracao canonica de publicacao (Stage G5)
+# =============================================================================
+# UNICO caminho de orquestracao ponta-a-ponta do IPIA-HRC PIA-based: fetch
+# das fontes -> import side -> domestic price -> carrega vintage anterior
+# (freeze) -> calcula serie integrada -> separa oficial/provisional ->
+# persiste vintage imutavel -> SO DEPOIS atualiza os LATEST outputs
+# mutaveis. `--ipia` (CLI, main() abaixo) e `scripts/gerar_ipia_hrc_v2_pia.py`
+# chamam esta MESMA funcao - nenhum dos dois reimplementa fetch, freeze,
+# calculo, separacao ou persistencia por conta propria (Stage G5, evita
+# duplicar a orquestracao que ja existia so no script).
+#
+# Ordem que preserva o invariante de publicacao pedido no Stage G5 (secao
+# 13): calcula tudo -> finaliza a vintage imutavel -> SO ENTAO atualiza os
+# LATEST mutaveis, sempre a partir da propria vintage ja persistida (nunca
+# do objeto em memoria) - se a persistencia da vintage falhar, a excecao
+# propaga ANTES de qualquer escrita em LATEST, entao um LATEST publicado
+# sempre corresponde a uma vintage imutavel real no disco. A ordem antiga
+# do script (LATEST escrito antes da vintage) tinha exatamente o problema
+# oposto - corrigida aqui, no unico lugar que agora importa.
+
+_PIPELINE_ANO_INI_PADRAO, _PIPELINE_ANO_FIM_PADRAO = 2012, 2026
+
+
+def _pipeline_comex_bruto_com_retry(ano_ini: int, ano_fim: int,
+                                    tentativas: int = 4, espera_s: float = 20.0) -> pd.DataFrame:
+    """Movido de scripts/gerar_ipia_hrc_v2_pia.py (Stage G5) - a Comex Stat
+    aplica rate limit (429) real; espera mais longa entre tentativas
+    resolveu na pratica. Mesmo comportamento, agora no unico lugar que o
+    CLI e o script compartilham."""
+    ultimo_erro = None
+    for tentativa in range(tentativas):
+        try:
+            return _comex_bobina_bruto(ano_ini, ano_fim)
+        except Exception as e:
+            ultimo_erro = e
+            print(f"  tentativa {tentativa + 1}/{tentativas} falhou ({e}); aguardando {espera_s:.0f}s...")
+            time.sleep(espera_s)
+    raise RuntimeError(f"Nao foi possivel buscar dado bruto do Comex Stat apos {tentativas} tentativas") from ultimo_erro
+
+
+def _pipeline_cambio_historico_seguro(ano_ini: int, ano_fim: int) -> pd.Series:
+    """Movido de scripts/gerar_ipia_hrc_v2_pia.py (Stage G5): busca
+    cambio_venda (PTAX) em pedacos <=10 anos (limite do BCB SGS para
+    series diarias) e concatena - identico ao workaround ja usado em
+    varios scripts/gerar_*.py, agora centralizado aqui."""
+    url = SGS_URL.format(cod=SGS["cambio_venda"])
+    corte = ano_ini + 6
+    janelas = [(f"01/01/{ano_ini}", f"31/12/{corte}"), (f"01/01/{corte + 1}", f"31/12/{ano_fim}")]
+    pedacos = []
+    for ini, fim in janelas:
+        dados = _get_json(url, {"dataInicial": ini, "dataFinal": fim})
+        pdf = pd.DataFrame(dados)
+        pdf["data"] = pd.to_datetime(pdf["data"], format="%d/%m/%Y")
+        pdf["valor"] = pd.to_numeric(pdf["valor"], errors="coerce")
+        pedacos.append(pdf.set_index("data")["valor"])
+    cambio = pd.concat(pedacos).sort_index()
+    return cambio[~cambio.index.duplicated(keep="last")]
+
+
+def _pipeline_import_side_hrc(df_bruto: pd.DataFrame, ano_ini: int, ano_fim: int) -> pd.DataFrame:
+    """Movido de scripts/gerar_ipia_hrc_v2_pia.py::gerar_import_side_2012_2026
+    (Stage G5): troca `sgs` por cambio ja buscado em pedacos seguros so
+    durante a chamada, e usa domestico "curinga" para nao deixar
+    `agregar_ipia_hrc_multi_ncm_mensal` recortar o import side pelo preco
+    domestico LEGADO antes do merge real com a PIA, mais adiante em
+    `executar_pipeline_ipia_hrc`."""
+    cambio_completo = _pipeline_cambio_historico_seguro(ano_ini, ano_fim)
+    domestico_curinga = pd.DataFrame(
+        {"preco_rs_t": 1.0}, index=pd.date_range(f"{ano_ini}-01-01", f"{ano_fim}-12-01", freq="MS"))
+    sgs_original = globals()["sgs"]
+    globals()["sgs"] = lambda codigo, inicio="01/01/2010": cambio_completo
+    try:
+        return agregar_ipia_hrc_multi_ncm_mensal(
+            ano_ini=ano_ini, ano_fim=ano_fim, df_bruto=df_bruto, domestico_df=domestico_curinga)
+    finally:
+        globals()["sgs"] = sgs_original
+
+
+def executar_pipeline_ipia_hrc(base_dir: str = VINTAGE_BASE_DIR_PADRAO,
+                                output_dir: str = "data/processed",
+                                vintage_id: Optional[str] = None,
+                                ppi_mensal_df: Optional[pd.DataFrame] = None,
+                                pia_domestico_df: Optional[pd.DataFrame] = None,
+                                ano_ini: int = _PIPELINE_ANO_INI_PADRAO,
+                                ano_fim: int = _PIPELINE_ANO_FIM_PADRAO) -> dict:
+    """Orquestracao canonica ponta-a-ponta do IPIA-HRC PIA-based (Stage
+    G5) - o UNICO caminho que faz fetch + calculo + persistencia de uma
+    nova vintage de publicacao. CLI (`--ipia`) e
+    `scripts/gerar_ipia_hrc_v2_pia.py` chamam esta funcao; nenhum dos
+    dois reimplementa qualquer parte dela.
+
+    `ppi_mensal_df`/`pia_domestico_df`: injecao de teste (mesmo padrao ja
+    usado em todo o modulo) - quando ambos sao fornecidos, NENHUMA chamada
+    de rede acontece (nem Comex, nem BCB, nem IBGE/SIDRA) e a funcao vai
+    direto para carregar a vintage anterior + calcular + persistir. Usado
+    pelos testes deterministicos do Stage G5 - nunca pelo caminho real
+    (CLI/script), que sempre deixa os dois como None para buscar ao vivo.
+
+    Sequencia (nesta ordem, sempre):
+      1. localizar a ultima vintage (se houver) - vira `congelado_df`;
+      2. buscar/receber import side (Comex bottom-up multi-NCM) e
+         domestic price (PIA + IPP + Denton);
+      3. calcular a serie completa via `calcular_ipia_hrc_v2_pia`;
+      4. separar oficial/provisional;
+      5. persistir a vintage IMUTAVEL (`salvar_vintage_ipia_hrc_v2`) -
+         se isto levantar excecao, a funcao para AQUI, sem tocar em
+         nenhum arquivo LATEST;
+      6. recarregar a vintage recem-persistida do disco e escrever os
+         LATEST outputs (`ipia_hrc_v2_official.csv`/
+         `ipia_hrc_v2_provisional.csv`) a partir DELA (nunca do objeto em
+         memoria) - garante que todo LATEST publicado corresponda
+         byte-a-byte a uma vintage imutavel real.
+
+    Retorna um dict com: `manifest`, `serie` (completa, 4 status),
+    `oficial`, `provisional` (como persistidas na vintage, com
+    data_vintage/source_vintage_id/methodology_version/revised),
+    `vintage_anterior` (dict carregado ou None), `csv_oficial`/
+    `csv_provisional` (caminhos escritos).
+
+    Nao e uma funcao pura - faz rede (quando `ppi_mensal_df`/
+    `pia_domestico_df` sao None) e escreve em disco (vintage + LATEST),
+    mesmo padrao ja documentado de I/O explicito deste modulo.
+    """
+    import os  # import local - mesmo padrao ja usado pelas outras branches de main() neste modulo
+    fetch_at_utc: dict[str, Optional[str]] = {}
+
+    vintage_anterior = None
+    ultima = ultima_vintage_ipia_hrc_v2(base_dir=base_dir)
+    if ultima is not None:
+        vintage_anterior = carregar_vintage_ipia_hrc_v2(ultima, base_dir=base_dir)
+
+    if ppi_mensal_df is None or pia_domestico_df is None:
+        fetch_at_utc["comex_fetch_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
+        df_bruto = _pipeline_comex_bruto_com_retry(ano_ini, ano_fim)
+        fetch_at_utc["bcb_fetch_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
+        ppi_mensal_df = _pipeline_import_side_hrc(df_bruto, ano_ini, ano_fim)
+
+        fetch_at_utc["pia_fetch_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
+        pia_anual = ibge_sidra_pia_hrc_anual()
+        fetch_at_utc["ipp_fetch_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
+        ipp_mensal = ibge_sidra_ipp_siderurgia()
+        pia_domestico_df = preco_domestico_hrc_pia_v2(pia_anual_df=pia_anual, ipp_mensal=ipp_mensal)
+
+    congelado_df = vintage_anterior["official"] if vintage_anterior is not None else None
+    serie = calcular_ipia_hrc_v2_pia(ppi_mensal_df=ppi_mensal_df, pia_domestico_df=pia_domestico_df,
+                                     congelado_df=congelado_df)
+    oficial, provisional = separar_ipia_hrc_v2_oficial_provisional(serie)
+
+    # Passo 5 - persiste a vintage IMUTAVEL. Se isto levantar, propaga
+    # direto para o chamador - nenhum LATEST e tocado (ver docstring).
+    manifest = salvar_vintage_ipia_hrc_v2(
+        serie, import_side_df=ppi_mensal_df, domestic_price_df=pia_domestico_df,
+        vintage_anterior=vintage_anterior, base_dir=base_dir, vintage_id=vintage_id,
+        sources_fetch_at_utc=fetch_at_utc)
+
+    # Passo 6 - SO ENTAO os LATEST, recarregados da propria vintage recem-
+    # persistida (nunca do `oficial`/`provisional` em memoria) - garante
+    # correspondencia exata entre LATEST e a vintage imutavel no disco.
+    vintage_nova = carregar_vintage_ipia_hrc_v2(manifest["vintage_id"], base_dir=base_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    csv_oficial = f"{output_dir}/ipia_hrc_v2_official.csv"
+    csv_provisional = f"{output_dir}/ipia_hrc_v2_provisional.csv"
+    vintage_nova["official"].to_csv(csv_oficial, index=False)
+    vintage_nova["provisional"].to_csv(csv_provisional, index=False)
+
+    return {
+        "manifest": manifest, "serie": serie,
+        "oficial": vintage_nova["official"], "provisional": vintage_nova["provisional"],
+        "vintage_anterior": vintage_anterior, "csv_oficial": csv_oficial, "csv_provisional": csv_provisional,
+        # inputs processados EXATOS usados neste calculo - devolvidos para que
+        # um chamador (ex. scripts/gerar_ipia_hrc_v2_pia.py, para a
+        # comparacao com o benchmark corporativo) nunca precise recarregar
+        # da vintage usando um `base_dir` default que pode nao bater com o
+        # `base_dir` desta chamada (Stage G5 - evita esse descasamento).
+        "ppi_mensal_df": ppi_mensal_df, "pia_domestico_df": pia_domestico_df,
+    }
+
+
+_MESES_ABREV_PT_BR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+
+def _mes_ano_pt_br(ts: pd.Timestamp) -> str:
+    """Abreviacao de mes/ano em PT-BR (ex. 'Jun/2026') sem depender de
+    locale do sistema nem de infraestrutura de i18n - so um mapeamento
+    fixo de 12 nomes, para o resumo de publicacao do CLI (Stage G5)."""
+    return f"{_MESES_ABREV_PT_BR[ts.month - 1]}/{ts.year}"
+
+
+def imprimir_resumo_publicacao_ipia_hrc(manifest: dict, oficial: pd.DataFrame, provisional: pd.DataFrame) -> None:
+    """Resumo de publicacao do IPIA-HRC para o terminal (CLI `--ipia`/
+    `--ipia-latest`, Stage G5) - tudo derivado de `manifest`/`oficial`/
+    `provisional`, nunca hardcoded. Nunca apresenta o valor PROVISIONAL
+    como definitivo (wording aprovado, ADR 0013)."""
+    print("\nIPIA-HRC")
+    print(f"Vintage: {manifest['vintage_id']}")
+
+    print("\nOFFICIAL")
+    if oficial.empty:
+        print("  (vazio)")
+    else:
+        print(f"  Cobertura: {manifest['coverage']['official_first_period']} -> "
+              f"{manifest['coverage']['official_last_period']}")
+        contagem = oficial["publication_status"].value_counts()
+        print(f"  EXPERIMENTAL: {int(contagem.get(STATUS_EXPERIMENTAL, 0))}")
+        print(f"  PUBLICATION_GRADE: {int(contagem.get(STATUS_PUBLICATION_GRADE, 0))}")
+
+    print("\nPROVISIONAL")
+    if provisional.empty:
+        print("  (vazio)")
+        return
+    print(f"  Cobertura: {manifest['coverage']['provisional_first_period']} -> "
+          f"{manifest['coverage']['provisional_last_period']}")
+    ultimo = provisional.sort_values("reference_period").iloc[-1]
+    mes_fmt = _mes_ano_pt_br(ultimo["reference_period"])
+    print(f"  Ultimo: {mes_fmt} - {ultimo['ipia_hrc_v2']:.2f}")
+
+    print(f"\nIPIA-HRC Provisorio - {mes_fmt}: {ultimo['ipia_hrc_v2']:.2f}")
+    print("Estimativa corrente sujeita a revisao quando o proximo benchmark anual da")
+    print("PIA-Produto for divulgado pelo IBGE. O valor nao e definitivo para o periodo.")
+
+
 def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
                                        df_bruto: pd.DataFrame | None = None,
                                        params: ParamsIPIA | None = None) -> pd.DataFrame:
@@ -3275,7 +3497,11 @@ def main():
     ap.add_argument("--preview-domestico", action="store_true",
                      help="encadeia o preco domestico trimestral (data/curated/) em serie mensal via IPP/IBGE e salva em data/processed/")
     ap.add_argument("--ipia", action="store_true",
-                     help="calcula o IPIA completo (custo de importacao + ancora domestica) e salva em data/processed/")
+                     help="publica o IPIA-HRC (PIA-based): busca as fontes, calcula, separa OFFICIAL/PROVISIONAL, "
+                         "persiste uma nova vintage imutavel e atualiza data/processed/ipia_hrc_v2_official.csv "
+                         "e ipia_hrc_v2_provisional.csv")
+    ap.add_argument("--ipia-latest", action="store_true",
+                     help="mostra a ultima vintage do IPIA-HRC ja publicada, sem rede e sem criar vintage nova")
     ap.add_argument("--pdf-ipia", action="store_true",
                      help="calcula o IPIA e gera relatorio PDF de 4 paginas em data/processed/ipia_relatorio.pdf")
     ap.add_argument("--ano-ini", type=int, default=2020)
@@ -3312,17 +3538,39 @@ def main():
         print(f"\nSalvo em {caminho} ({len(mensal)} meses)")
         sys.exit(0)
     if a.ipia:
-        print(f"Calculando IPIA, {a.ano_ini}-{a.ano_fim} ...")
-        out = calcular_ipia_mensal(a.ano_ini, a.ano_fim)
-        if out.empty:
-            print("Nenhum dado de importacao retornado - confira o periodo ou rode --check-sources primeiro.")
+        # --ano-ini/--ano-fim NAO se aplicam ao pipeline IPIA-HRC PIA-based
+        # (Stage G5): a janela de fetch do import side (2012-presente) e a
+        # janela de publicacao (OFFICIAL/PROVISIONAL, determinada pela
+        # cobertura real de dado + congelamento de vintage) ja sao fixas no
+        # pipeline aprovado (`executar_pipeline_ipia_hrc`/
+        # `scripts/gerar_ipia_hrc_v2_pia.py`) - deixar o usuario estreitar
+        # essa janela via flag arriscaria gerar uma publicacao OFFICIAL
+        # parcial que omite meses historicos ja congelados, o que o
+        # contrato de vintage (ADR 0012) proibe. Nunca inventado em
+        # silencio: se o usuario passar valores diferentes do default,
+        # avisamos explicitamente que foram ignorados para este caminho.
+        if a.ano_ini != 2020 or a.ano_fim != 2026:
+            print("Aviso: --ano-ini/--ano-fim nao se aplicam ao IPIA-HRC (janela de publicacao "
+                  "ja fixada pelo pipeline aprovado) - ignorados nesta execucao.")
+        print("Publicando IPIA-HRC (PIA-based) ...")
+        try:
+            resultado = executar_pipeline_ipia_hrc()
+        except Exception as e:
+            print(f"Falha ao publicar o IPIA-HRC: {e}")
+            print("Nenhuma vintage nova foi criada; os outputs LATEST anteriores (se existirem) "
+                  "permanecem inalterados.")
             sys.exit(1)
-        print(out.to_string())
-        import os
-        os.makedirs("data/processed", exist_ok=True)
-        caminho = "data/processed/ipia_mensal.csv"
-        out.to_csv(caminho)
-        print(f"\nSalvo em {caminho} ({len(out)} meses)")
+        print(f"CSV oficial (latest) salvo em:     {resultado['csv_oficial']}")
+        print(f"CSV provisional (latest) salvo em: {resultado['csv_provisional']}")
+        imprimir_resumo_publicacao_ipia_hrc(resultado["manifest"], resultado["oficial"], resultado["provisional"])
+        sys.exit(0)
+    if a.ipia_latest:
+        vintage_id = ultima_vintage_ipia_hrc_v2()
+        if vintage_id is None:
+            print("Nenhuma vintage do IPIA-HRC foi publicada ainda - rode --ipia primeiro.")
+            sys.exit(1)
+        vintage = carregar_vintage_ipia_hrc_v2(vintage_id)
+        imprimir_resumo_publicacao_ipia_hrc(vintage["manifest"], vintage["official"], vintage["provisional"])
         sys.exit(0)
     if a.pdf_ipia:
         print(f"Gerando relatorio PDF do IPIA (4 paginas), {a.ano_ini}-{a.ano_fim} ...")
