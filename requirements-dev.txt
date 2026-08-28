@@ -1,0 +1,12 @@
+# Dependencias de desenvolvimento/teste (nao usadas pelo pipeline em
+# producao) - separadas de requirements.txt para manter esse arquivo
+# como a lista minima do que o codigo de producao importa.
+#
+# pytest nao estava pinado em nenhum lugar do repositorio antes deste
+# arquivo. Versao escolhida por ser a mesma ja instalada no Python global
+# desta maquina (INSTALLED: 9.1.1 via `pip index versions pytest`),
+# melhor evidencia disponivel do ambiente usado quando a suite rodava
+# saudavel localmente, antes do bloqueio do Smart App Control. Nao ha
+# evidencia de nenhuma outra versao ter sido usada.
+-r requirements.txt
+pytest==9.1.1

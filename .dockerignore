@@ -1,0 +1,25 @@
+# Ambiente/harness local - nunca deve entrar na imagem.
+.venv/
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+**/.pytest_cache/
+
+# Artefatos gerados localmente (regeneraveis, nao usados pelos testes -
+# ver docstrings de tests/unit/test_ipia_hrc_v2_vintages.py e
+# tests/unit/test_vintage_store.py: testes injetam dado via tmp_path, nao
+# leem data/raw ou data/processed reais). data/curated/ FICA incluso
+# (usado por tests/characterization/test_domestic_price_current.py).
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Editor/OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

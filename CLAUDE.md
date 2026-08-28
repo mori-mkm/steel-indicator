@@ -96,6 +96,14 @@ Run the smallest relevant pytest target first, then the full suite.
 
 Preserve `--selftest` until an accepted decision removes it. Never weaken tests to make verification pass.
 
+On Windows, if `import pandas` fails with a DLL/Code Integrity error (Smart App Control blocking `pandas/_libs/index*.pyd`), do not attempt to disable that policy. Run the same two commands inside the official Docker harness instead — see `README.md` § Testing:
+
+```bash
+docker build -t steel-indicator-dev .
+docker run --rm steel-indicator-dev python -m pytest tests/ -v
+docker run --rm steel-indicator-dev python src/indices_setoriais.py --selftest
+```
+
 Network/source checks are integration verification, not unit tests.
 
 ## Methodology invariants

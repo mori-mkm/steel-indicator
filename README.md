@@ -83,6 +83,9 @@ steel-indicator/
 ├── README.md
 ├── CLAUDE.md
 ├── requirements.txt
+├── requirements-dev.txt            # adds pytest, for the test suite
+├── Dockerfile                      # official reproducible dev/test environment
+├── .dockerignore
 ├── pytest.ini
 ├── src/
 │   ├── indices_setoriais.py       # calculation engine, CLI, embedded selftest
@@ -142,10 +145,11 @@ source .venv/bin/activate
 ```
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt        # runtime dependencies only
+pip install -r requirements-dev.txt    # adds pytest, for running the test suite
 ```
 
-Direct dependencies: pandas, NumPy, Requests, Matplotlib, pdfplumber, xlrd (see `requirements.txt` for why each is needed).
+Direct dependencies: pandas, NumPy, Requests, Matplotlib, pdfplumber, xlrd (see `requirements.txt` for why each is needed). `requirements-dev.txt` pulls in `requirements.txt` and adds `pytest` — pytest isn't a runtime dependency of the calculation engine itself.
 
 ## Usage
 
@@ -161,12 +165,34 @@ Direct dependencies: pandas, NumPy, Requests, Matplotlib, pdfplumber, xlrd (see 
 
 ## Testing
 
+**Official reproducible harness: Docker.** On Windows, Smart App Control /
+Code Integrity has been observed blocking the pandas native extension
+(`pandas/_libs/index*.pyd`) in both the global interpreter and a local
+`.venv`, which makes `import pandas` — and therefore pytest and
+`--selftest` — fail before any test code runs. This is a Windows security
+policy interaction, not a project bug. Docker sidesteps it entirely by
+running the exact same pinned dependencies on Linux, with no change to any
+Windows security setting.
+
+```bash
+docker build -t steel-indicator-dev .
+docker run --rm steel-indicator-dev python -m pytest tests/ -v
+docker run --rm steel-indicator-dev python src/indices_setoriais.py --selftest
+```
+
+334 automated tests (characterization + unit), plus the embedded engine
+self-check. No unit or characterization test makes a live network call or
+writes to `data/processed/`; `tests/integration/` is a planned layer for
+live external-source contract checks and is currently empty.
+
+Local execution without Docker still works identically on platforms where
+pandas' native extension isn't blocked (Linux, macOS, or Windows without
+this policy interaction):
+
 ```bash
 python -m pytest tests/ -v
 python src/indices_setoriais.py --selftest
 ```
-
-330 automated tests (characterization + unit), plus the embedded engine self-check. No unit or characterization test makes a live network call or writes to `data/processed/`.
 
 ## Reporting
 
