@@ -1305,6 +1305,94 @@ novo).
   `<produto>/<vintage_id>/` + manifest não impede isso), mas não
   implementada agora.
 
+## 12.13 Papéis PIA / IPP / Denton e validação empírica do sinal do IPP-242 (KEEP WITH LIMITATION)
+
+Decisão Level 3 aprovada: manter `PIA-HRC + IPP-242 + Denton proporcional`
+(§12.10/§12.11) como metodologia oficial atual do preço doméstico HRC, sem
+recalibração nem troca de indicador, reforçando o disclosure já existente
+(`proxy_reason=PRODUCT_AGGREGATION`, §12.9/ADR 0010) com a evidência
+empírica reunida na validação dedicada. **Etapa de documentation/disclosure
+apenas — nenhuma fórmula, série, vintage ou `VERSAO_METODOLOGIA` muda.**
+Evidência completa (tabelas, Pearson/Spearman, leave-one-out, baselines,
+comparação com âncora corporativa, robustez) em
+`docs/validation/ipp242_pia_hrc_validation.md`; esta seção traz só o
+resumo oficial.
+
+**Divisão de papéis (já implementada, agora explícita na metodologia):**
+
+- `PIA = nível anual` — a PIA-Produto ancora o nível de cada ano; o Denton
+  reconcilia a série mensal para que `mean(preço mensal do ano)` bata
+  exatamente com o valor PIA daquele ano (§12.10, restrição
+  `TEMPORAL_ALLOCATION_PROXY`).
+- `IPP = forma intra-ano` — o IPP 242-Siderurgia não define nível nenhum;
+  fornece só a trajetória relativa de alta frequência usada para
+  distribuir o nível anual da PIA entre os 12 meses.
+- `Denton = reconciliação temporal` — o Proportional Denton (§12.10)
+  combina os dois, preservando a restrição anual por construção.
+
+**Consequência metodológica importante:** a principal incerteza da
+construção mensal não está no nível anual (reconciliado com a PIA por
+construção do Denton), e sim na trajetória intra-anual imposta pelo
+IPP-242 entre os benchmarks anuais da PIA.
+
+**Evidência empírica (resumo; números confirmados em
+`docs/validation/ipp242_pia_hrc_validation.md`):** a validação comparou a
+variação anual da PIA-HRC com a do IPP-242 (N=4 anos, 2020-2023, método
+principal) e encontrou direção consistente, mas não perfeita — 3 de 4
+variações anuais no mesmo sinal (75%), 4 de 5 na robustez dezembro/dezembro
+(80%). A correlação de Pearson do método principal é 0,993, mas com N=4 um
+único coeficiente não é prova estatística robusta, e é sensível à forma de
+agregação: usando dezembro/dezembro em vez da média anual, cai para 0,831
+— por isso a correlação não deve ser citada isoladamente, nem como
+"0,99", como validação do indicador; directional accuracy e robustez são
+mais informativas. O leave-one-out mantém Pearson entre 0,93 e 0,999 em
+todos os subconjuntos de N=3 (não colapsa ao remover o ano do supercycle,
+2021) e directional accuracy entre 66,7% e 100%. A comparação mensal
+existente com a âncora corporativa (gap médio ≈-11,56%) **não é um teste
+independente**, porque os dois lados usam o mesmo IPP-242 para encadear —
+a checagem mais limpa é uma âncora corporativa trimestral **bruta**
+(pré-IPP), que teve 4 de 4 trimestres (100%) no mesmo sinal, correlação
+QoQ ≈0,80, contra 0/4 de uma baseline sem indicador algum (repete o último
+nível). Na janela benchmarked 2019-2023, Denton+IPP-242 não é equivalente
+a uma interpolação linear nem a um degrau anual — carrega o maior MAD de
+variação mensal entre os três e é o único que reproduz o pico-e-correção
+de 2021; isso mostra que o IPP não é redundante com uma interpolação
+ingênua, mas não é prova de trajetória mensal verdadeira, porque não existe
+ground truth mensal de HRC independente para 2019-2023.
+
+**Diagnóstico de magnitude (`β ≈ 1,44`, regressão diagnóstica g_PIA ~
+g_IPP, método principal):** dentro da amostra pequena disponível, a
+magnitude das variações anuais da PIA-HRC foi cerca de 1,4× maior que a
+capturada pelo IPP-242 — consistente com um índice agregado de toda a
+siderurgia suavizando/subestimando ciclos específicos de bobina a quente
+(coerente com `PRODUCT_AGGREGATION`, §12.9). **Diagnóstico apenas — β não
+é usado para recalibrar, multiplicar ou ajustar o IPP-242, o Denton ou o
+preço doméstico.**
+
+**Classificação da evidência: MODERATE** (confiança: MEDIUM). Favorável:
+directional accuracy majoritariamente correta, correlação sempre positiva
+e economicamente coerente nos três métodos testados, leave-one-out
+estável, checagem trimestral independente positiva (4/4), valor agregado
+claro contra baseline sem indicador (4/4 vs. 0/4). Limitações: N anual
+estruturalmente pequeno (4-5 benchmarks); correlação sensível à forma de
+agregação (0,99→0,83); IPP-242 continua sendo proxy setorial agregado
+(`PRODUCT_AGGREGATION`); ausência de ground truth mensal independente de
+HRC na janela benchmarked 2019-2023.
+
+**Leitura correta da evidência:** suficiente para sustentar o uso atual do
+IPP-242 como indicador de alta frequência no Denton, insuficiente para
+tratá-lo como benchmark específico de HRC ou para justificar recalibração
+neste momento. Não há evidência de que o método (Denton) seja o problema —
+literatura institucional (IMF WP/16/71) indica que Chow-Lin seria menos
+defensável com este N. Pesquisa futura de indicador mensal mais específico
+de HRC (quando/se existir) permanece um item de roadmap, não uma ação
+desta etapa.
+
+**Versionamento:** esta seção não altera fórmula, fonte, indicador, peso
+ou série publicada — é formalização de validação já existente, não
+mudança metodológica (§24: "mudanças estruturais sem efeito econômico não
+exigem bump metodológico"). `VERSAO_METODOLOGIA` permanece inalterada.
+
 ---
 
 # 13. IPIA-Vergalhão — preço doméstico
@@ -1729,7 +1817,15 @@ Princípios:
   0014** (FX Convention Sprint): o motor V2 passou a usar média mensal
   das observações diárias válidas (`calcular_fx_mensal`, §9.6). O motor
   legado V1 permanece deliberadamente na convenção antiga (referência
-  histórica, não a série publicada).
+  histórica, não a série publicada);
+- o IPP 242-Siderurgia usado pelo Denton (§12.10/§12.13) tem evidência
+  empírica MODERATE (confiança MEDIUM) de conter sinal direcional útil
+  para a dinâmica de preço do HRC — direção majoritariamente correta
+  (75-100% conforme o teste), mas N anual pequeno (4-5 benchmarks),
+  correlação sensível à forma de agregação (0,99→0,83) e magnitude
+  historicamente subestimada frente à PIA-HRC (`β≈1,44`). KEEP WITH
+  LIMITATION decidido nesta etapa — sem recalibração, sem troca de
+  indicador; ver §12.13 e `docs/validation/ipp242_pia_hrc_validation.md`.
 
 ## IPIA-Vergalhão
 - cesta NCM final não está congelada;
