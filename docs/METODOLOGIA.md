@@ -540,48 +540,64 @@ desconhecido, teste de limiares candidatos) em
 
 ## 9.6 Câmbio (FX)
 
-Documentação explícita e reprodutível do tratamento cambial usado no PPI —
-sem alterar a implementação atual nesta etapa.
+**Convenção oficial (ADR 0014, motor V2 — `agregar_ipia_hrc_multi_ncm_mensal`,
+alimenta `ipia_hrc_v2_official.csv`/`ipia_hrc_v2_provisional.csv`):**
+
+```
+FX_t = (1 / N_t) · Σ FX_d,  para todo dia útil d com cotação válida cujo mês-calendário é t
+```
 
 - **Fonte:** BCB/SGS, série `1` — "Taxa de câmbio - Livre - Dólar americano
-  (venda) - diário" (PTAX venda).
-- **Frequência da fonte:** diária.
+  (venda) - diário" (PTAX venda de fechamento — confirmado ao vivo contra
+  o endpoint oficial de PTAX; o boletim de fechamento já é, por
+  metodologia do BCB desde a Resolução BCB nº 45/2020, a média aritmética
+  dos 4 boletins diários).
+- **Frequência da fonte:** diária (dias úteis).
 - **Moeda:** BRL por USD, venda (não compra, não paralela).
-- **Regra de agregação para o período mensal do Comex Stat:** a série diária
-  é reindexada para o índice mensal dos dados de importação com
-  `method="ffill"` (`indices_setoriais.py`, funções `_comex_bobina_hrc_v2_mensal`
-  e `_pipeline_cambio_historico_seguro`) — ou seja, **cada mês recebe a
-  última cotação PTAX venda observada até (e incluindo) aquele mês**, não
-  uma média mensal. Na prática isso se aproxima do câmbio de fechamento do
-  período, não do câmbio médio do período.
-- **Dias sem cotação:** carregados adiante (forward-fill) a partir da última
-  cotação diária válida; nenhuma interpolação, nenhuma projeção. Se não
-  houver nenhuma cotação anterior disponível, o valor permanece `NaN`
-  (nunca fabricado).
-- **Correspondência temporal com o Comex Stat:** o Comex Stat publica valor
-  FOB/frete/seguro agregados por mês-calendário; o câmbio de referência de
-  cada mês é a cotação diária mais recente dentro (ou antes) desse
-  mês-calendário, pelo mesmo índice de datas mensal usado para o restante
-  da série de importação.
+- **Agregação mensal:** média aritmética simples das observações diárias
+  válidas cujo mês-calendário é exatamente `t` — implementada em
+  `indices_setoriais.calcular_fx_mensal(cambio_diario, meses_idx)`, a
+  única função que produz o câmbio mensal do motor V2. Nunca faz
+  forward-fill entre meses.
+- **Meses sem nenhuma observação diária válida:** `calcular_fx_mensal`
+  levanta `ValueError` explícito (fail-fast) — nunca herda
+  silenciosamente o câmbio de outro mês.
+- **Correspondência temporal com o Comex Stat:** o Comex Stat define o
+  mês de uma importação pela data de **desembaraço aduaneiro** (confirmado
+  no FAQ oficial do MDIC), evento que ocorre dentro do próprio mês `t` —
+  a média mensal cobre exatamente esse período, ao contrário da convenção
+  anterior (ver histórico abaixo).
 - **Limite operacional da fonte:** a API do BCB/SGS rejeita (HTTP 406)
   janelas de consulta de série diária maiores que ~10 anos; a coleta é
   particionada em blocos de até 10 anos e concatenada
   (`_pipeline_cambio_historico_seguro`). Nunca usa `/dados/ultimos/N`
   (proibido pelo projeto — ver `docs/data-sources.md`).
-- **Nível de proveniência:** `OBSERVADO` — valor direto da fonte, sem
-  fórmula própria (`classificar_cambio()`, `indices_setoriais.py`).
+- **Nível de proveniência:** `OBSERVADO` — valor direto da fonte;
+  `calcular_fx_mensal` é uma média aritmética determinística sobre
+  observado, sem interpolação/encadeamento/suavização (não muda a
+  classificação `OBSERVADO`, na mesma lógica de FOB/frete/seguro
+  observados via razão em §9.8).
+- **Limitação (câmbio observado ≠ câmbio efetivamente contratado por
+  cada importador):** nenhuma convenção baseada em PTAX/SGS reproduz
+  necessariamente a taxa efetiva de uma empresa específica — hedge,
+  forward, fechamento antecipado ou outras condições de tesouraria podem
+  divergir da PTAX. O IPIA-HRC estima uma **paridade de mercado
+  reprodutível** a partir de fonte pública e auditável, não a tesouraria
+  de nenhuma empresa. Isso não é uma falha do índice, é a diferença entre
+  um benchmark reproduzível e um custo individual.
 
-**Item aberto, não resolvido nesta etapa:** a pesquisa original
-(`references/manual_metodologico_indices_setoriais.md` §5.2) descreve a
-intenção como "câmbio PTAX **médio** do mês", mas a implementação em
-produção usa a **última cotação disponível até o mês** (efetivamente um
-câmbio de fechamento/ponto, via forward-fill), não uma média das cotações
-diárias do mês. As duas convenções produzem valores diferentes e ambas são
-defensáveis (fechamento reflete a data de referência do lote de importação;
-média suaviza volatilidade intramensal). **Nenhuma mudança é feita agora** —
-ver §26 para o registro desta divergência como limitação conhecida e
-critério de reabertura futura (decisão Level 3, pois mudaria valores
-publicados).
+**Histórico da convenção (não mais vigente para o motor V2):** até a ADR
+0014, o motor V2 usava `sgs(...).reindex(<índice mensal>, method="ffill")`,
+que fazia `FX_t` corresponder à última cotação PTAX venda observada **antes
+do início** do mês `t` — na prática, o fechamento do mês **anterior**, não
+uma média nem o fechamento do próprio mês `t`. Esse comportamento nunca foi
+uma decisão metodológica deliberada (efeito colateral de `freq="MS"` +
+`ffill`; ver `docs/validation/fx_convention_validation.md` e ADR 0014 para
+a investigação completa e a decisão). **O motor legado V1**
+(`calcular_ipia_mensal`, `custo_importacao_detalhado_mensal` — usado por
+`--selftest` e pelo PDF antigo, nunca pela série oficial/provisional)
+**permanece deliberadamente nessa convenção antiga** — é referência
+histórica congelada, não a série publicada.
 
 ## 9.7 Viés de valor unitário (unit value bias)
 
@@ -641,7 +657,7 @@ explícita a classificação de parâmetros que já existiam no código.
 | FOB | `ValorFOB_t / PesoLíquido_t` | Comex Stat `/general` | CALCULADO (valor unitário sobre observado — ver §9.7 para o viés associado) | Sim, por mês | mês × NCM × país | Sem vigência (recalculado a cada coleta) | Unit value, não price assessment — §9.7 |
 | Frete | `ValorFrete_t / Peso_t` | Comex Stat `/general` | CALCULADO | Sim, por mês, quando disponível na fonte | mês × NCM × país | Sem vigência | Precedência sobre parâmetro fixo aproximado quando observado (§9.2) |
 | Seguro | `ValorSeguro_t / Peso_t` | Comex Stat `/general` | CALCULADO | Sim, por mês, quando disponível na fonte | mês × NCM × país | Sem vigência | Idem frete |
-| Câmbio (FX) | PTAX venda, última cotação até o mês (forward-fill) | BCB/SGS série 1 | OBSERVADO | Sim, mensal (derivado de diário) | Mensal (mesmo câmbio para todos os NCMs/países no mês) | Sem vigência (série contínua) | Ver §9.6 para a regra completa e a divergência com a pesquisa original |
+| Câmbio (FX) | PTAX venda, média mensal das observações diárias válidas (ADR 0014; motor V1 legado permanece na convenção antiga — última cotação antes do mês) | BCB/SGS série 1 | OBSERVADO | Sim, mensal (derivado de diário) | Mensal (mesmo câmbio para todos os NCMs/países no mês) | Sem vigência (série contínua) | Ver §9.6 para a regra completa |
 | II (Imposto de Importação) | `resolver_ii(ncm, data)` | Legislação/TEC (Res. CAMEX/GECEX) | OBSERVADO | Sim, por NCM e por data (`valid_from`/`valid_to`) | NCM × período de vigência | `2022-04-01→presente`: PUBLICATION_GRADE; `2012-01-01→2022-03-31`: EXPERIMENTAL (9/13 NCMs não comprovados); fora dessa janela: UNKNOWN | Nunca usa alíquota atual como fallback para período sem regra comprovada (§9.5.1) |
 | AFRMM | `resolver_afrmm(data)` | Lei 10.893/2004 (25%) até 2022-03-24; Lei 14.301/2022 (8%) a partir de 2022-03-25 | OBSERVADO | Sim, por data (`valid_from`/`valid_to`) | Nacional, por período de vigência | Vigência legal explícita (duas faixas documentadas) | Aplicado somente sobre o frete (`Frete_USD × Câmbio × alíquota`), nunca sobre o CIF completo |
 | Antidumping | `resolver_antidumping(origin, data, exporter)` | Resoluções GECEX/CAMEX por origem/exportador | OBSERVADO | Sim, por origem/exportador/data (`valid_from`/`valid_to`) | País de origem × exportador × período | Medidas específicas documentadas (ex.: suspensão China/Rússia 2018-01–2020-01); usa sempre `effective_value`, nunca `nominal_value`, no custo | `nominal_value` preservado só como proveniência informativa |
@@ -1708,10 +1724,12 @@ Princípios:
   no IPIA é pequeno para D_porto/D_interno e moderado para a margem
   (§9.10) — nenhum dos três bloqueia publicação, mas nenhum tem fonte
   primária documentada;
-- o câmbio de referência do PPI é a última cotação PTAX venda disponível
-  até o mês (forward-fill), não uma média mensal como a pesquisa original
-  presumia (§9.6) — divergência documentada, não resolvida; reabri-la
-  exigiria decisão Level 3 por mudar valores publicados.
+- ~~o câmbio de referência do PPI é a última cotação PTAX venda disponível
+  até o mês (forward-fill), não uma média mensal~~ — **resolvido pela ADR
+  0014** (FX Convention Sprint): o motor V2 passou a usar média mensal
+  das observações diárias válidas (`calcular_fx_mensal`, §9.6). O motor
+  legado V1 permanece deliberadamente na convenção antiga (referência
+  histórica, não a série publicada).
 
 ## IPIA-Vergalhão
 - cesta NCM final não está congelada;

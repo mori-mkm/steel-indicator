@@ -65,13 +65,20 @@ from steel_indicator.storage import vintage_store
 # 0. CONFIGURACAO
 # =============================================================================
 
-VERSAO_METODOLOGIA = "1.2"  # bump manual quando a metodologia de calculo mudar
+VERSAO_METODOLOGIA = "1.3"  # bump manual quando a metodologia de calculo mudar
 # (nao a cada commit) - referenciada em docs/METODOLOGIA.md e no painel
 # "Report Information" do relatorio PDF. 1.0 = motor inicial do IPIA;
 # 1.1 = suavizacao seletiva (ADR 0005) + taxa de penetracao de importacao
 # (ADR 0007); 1.2 = taxonomia OBSERVADO/CALCULADO/ESTIMADO/PROXY (ADR
 # 0008) + correcao do spread da decomposicao de custo, que podia misturar
-# dois meses diferentes sem avisar (ver docs/adr/0008).
+# dois meses diferentes sem avisar (ver docs/adr/0008); 1.3 = convencao
+# cambial do PPI (motor V2/`agregar_ipia_hrc_multi_ncm_mensal`) trocada de
+# "ultima cotacao antes do inicio do mes" (efeito colateral nao
+# intencional de reindex+ffill) para media mensal das observacoes diarias
+# validas (`calcular_fx_mensal`, ADR 0014) - muda valores publicados,
+# nunca a formula estrutural do PPI. Motor legado V1
+# (`calcular_ipia_mensal`/`custo_importacao_detalhado_mensal`)
+# deliberadamente NAO alterado (ver ADR 0014).
 
 # --- Series SGS do Banco Central -------------------------------------------
 # VERIFICADAS AO VIVO nesta sessao (valores de jun/2026 conferidos):
@@ -561,6 +568,43 @@ def sgs(codigo: int, inicio: str = "01/01/2010") -> pd.Series:
     df["data"] = pd.to_datetime(df["data"], format="%d/%m/%Y")
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
     return df.set_index("data")["valor"].rename(f"sgs_{codigo}")
+
+
+def calcular_fx_mensal(cambio_diario: pd.Series, meses_idx: pd.DatetimeIndex) -> pd.Series:
+    """Regra oficial UNICA de agregacao mensal do cambio do PPI (ADR 0014):
+
+        FX_t = media aritmetica de cambio_diario[d] para todo dia util `d`
+               cujo mes-calendario e exatamente `t`.
+
+    Substitui a convencao anterior (`reindex(freq="MS", method="ffill")`),
+    que fazia FX_t corresponder, na pratica, a cotacao do fechamento do
+    MES ANTERIOR (efeito colateral de implementacao, nunca uma decisao
+    metodologica deliberada - ver docs/validation/fx_convention_validation.md
+    e ADR 0014). Nunca faz forward-fill entre meses: um mes de `meses_idx`
+    sem NENHUMA observacao diaria valida levanta ValueError explicito, em
+    vez de herdar silenciosamente o cambio de outro mes.
+
+    `cambio_diario` deve ser uma serie diaria (index = datas, ex.: retorno
+    de `sgs(SGS["cambio_venda"], ...)` ou de `_pipeline_cambio_historico_seguro`).
+    `meses_idx` e o indice mensal alvo (timestamps de inicio de mes,
+    YYYY-MM-01) - o mesmo indice que os demais componentes do PPI (FOB,
+    frete, seguro) ja usam.
+    """
+    diario = cambio_diario.dropna()
+    diario.index = pd.to_datetime(diario.index)
+
+    por_mes = diario.groupby(diario.index.to_period("M")).mean()
+    por_mes.index = por_mes.index.to_timestamp()
+
+    faltantes = pd.DatetimeIndex(meses_idx).difference(por_mes.index)
+    if len(faltantes) > 0:
+        exemplos = ", ".join(faltantes.strftime("%Y-%m")[:5])
+        raise ValueError(
+            f"calcular_fx_mensal: {len(faltantes)} mes(es) sem nenhuma "
+            f"observacao diaria de cambio valida (ex.: {exemplos}) - nao e "
+            "permitido preencher com o cambio de outro mes.")
+
+    return por_mes.reindex(meses_idx).rename("cambio_mensal")
 
 
 IBGE_SIDRA_IPP_URL = "https://servicodados.ibge.gov.br/api/v3/agregados/6903/periodos/{periodos}/variaveis/10008"
@@ -1320,7 +1364,7 @@ def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
     datas = pd.to_datetime(df["year"].astype(str) + "-"
                             + df["monthNumber"].astype(str).str.zfill(2) + "-01")
     idx_mensal = pd.date_range(datas.min(), datas.max(), freq="MS")
-    cambio = sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}").reindex(idx_mensal, method="ffill")
+    cambio = calcular_fx_mensal(sgs(SGS["cambio_venda"], inicio=f"01/01/{ano_ini}"), idx_mensal)
 
     grupos = custo_importacao_bottom_up_mensal(df, cambio, p=p, exporter=exporter)
     if grupos.empty:

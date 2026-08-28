@@ -3,12 +3,30 @@
 """VALIDATION / NON-PUBLISHED / COUNTERFACTUAL - Level 3 decision support for
 the FX convention used in the IPIA-HRC PPI (docs/METODOLOGIA.md 9.6).
 
+HISTORICAL NOTE (post-ADR 0014): this script was written BEFORE the FX
+Convention Sprint decision and is preserved unmodified in its calculation
+logic - it is the artifact that made the decision possible
+(docs/validation/fx_convention_validation.md) and must not be destroyed.
+Production (`indices_setoriais.agregar_ipia_hrc_multi_ncm_mensal`) no
+longer uses convention A (`reindex(freq="MS", method="ffill")`) - it now
+uses `calcular_fx_mensal` (convention B, monthly mean), per ADR 0014
+(`docs/adr/0014-ppi-fx-convention-media-mensal.md`). So what this script
+labels "A - CURRENT" is, after the migration
+(`scripts/migrar_fx_convention_media_mensal.py`,
+`docs/validation/fx_convention_migration.md`), the LEGACY convention
+(still used, deliberately, only by the V1 engine -
+`calcular_ipia_mensal`/`custo_importacao_detalhado_mensal`), and what it
+labels "B - MEAN" is now what production actually computes for the V2
+engine. Re-running this script still works exactly as before (nothing
+here reads or depends on `agregar_ipia_hrc_multi_ncm_mensal`) and still
+correctly reproduces the LEGACY-vs-MEAN comparison that justified the
+decision - it just no longer describes "current production" for A.
+
 Does NOT alter any official vintage, the published official/provisional
 CSVs, or any production code. Purely analytical: builds two counterfactual
-FX series alongside the one actually used in production, recomputes PPI/
-IPIA with each (reusing the exact production formula, `indices_setoriais.
-_ppi_brl_t`/`ipia`, never a reimplementation), and reports comparison
-statistics.
+FX series alongside the legacy one, recomputes PPI/IPIA with each
+(reusing the exact production formula, `indices_setoriais._ppi_brl_t`/
+`ipia`, never a reimplementation), and reports comparison statistics.
 
 Reuses `data/processed/validation/ipia_hrc_v2_import_decomposition_panel.csv`
 (produced by `scripts/validar_ipia_hrc_v2_final.py`, Stage G3) as the source

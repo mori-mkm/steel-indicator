@@ -35,8 +35,16 @@ def _dom_df(ano, mes, preco_rs_t=5000.0):
 
 
 def _stub_sgs(cambio=5.0):
+    """Stub de cambio CONSTANTE cobrindo 2010-2030 (dado diario sintetico) -
+    nao um unico ponto antigo (2000-01-01) como antes: `calcular_fx_mensal`
+    (ADR 0014) exige observacao diaria DENTRO do mes-alvo, nunca herda de
+    outro mes via forward-fill. Como o valor e constante, a media mensal
+    bate exatamente com `cambio` para qualquer mes que os testes usarem -
+    nao muda a semantica destes testes (que sao sobre agregacao por
+    NCM/politica comercial, nao sobre a convencao de cambio em si)."""
     def _sgs(codigo, inicio="01/01/2010"):
-        return pd.Series([cambio], index=[pd.Timestamp("2000-01-01")], name=f"sgs_{codigo}")
+        dias = pd.date_range("2010-01-01", "2030-12-31", freq="D")
+        return pd.Series(cambio, index=dias, name=f"sgs_{codigo}")
     return _sgs
 
 

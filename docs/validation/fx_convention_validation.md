@@ -2,10 +2,22 @@
 
 **Status: VALIDATION / NON-PUBLISHED — Level 3 decision support, not a decision.**
 
+> **Atualização de implementação:** a recomendação **B (monthly mean)**
+> deste documento foi **aprovada e implementada** — ver ADR 0014
+> (`docs/adr/0014-ppi-fx-convention-media-mensal.md`) e
+> `docs/validation/fx_convention_migration.md` (execução da migração,
+> vintages envolvidas, comparativo antigo-vs-novo). Este documento
+> permanece **inalterado** como registro histórico da investigação que
+> levou à decisão — não reflete mais o estado atual do código para o
+> motor V2 (`agregar_ipia_hrc_multi_ncm_mensal`), mas continua correto
+> como descrição do motor legado V1 (`calcular_ipia_mensal`), que não foi
+> alterado.
+
 Nenhum vintage oficial, série publicada, CSV de produção ou PDF foi
 alterado por este documento ou pelo script que o produziu
-(`scripts/validar_fx_convention.py`). A convenção cambial de produção
-permanece exatamente a que já existia antes desta análise.
+(`scripts/validar_fx_convention.py`) **no momento em que foi escrito**. A
+convenção cambial de produção permanece exatamente a que já existia
+antes desta análise **— ver a atualização acima para o que mudou depois**.
 
 Reproduzir: `docker run --rm -v "$(pwd)/data:/app/data" steel-indicator-dev python scripts/validar_fx_convention.py`
 (no Windows/git-bash, prefixar `MSYS_NO_PATHCONV=1`).
