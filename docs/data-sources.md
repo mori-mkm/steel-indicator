@@ -31,7 +31,7 @@ A source can be technically reachable while still being `TO_CONFIRM`.
 |---|---|---|---|---|
 | MDIC Comex Stat | HRC import value, quantity/weight, freight, insurance, origin | POST API | VERIFIED with remaining field-level checks | Validate current NCM basket and availability of freight/insurance for required periods |
 | BCB SGS | Exchange rate and macro/credit series | GET API | MIXED | Validate every series identifier/label; use deterministic date ranges |
-| IBGE SIDRA — IPP Metalurgia | Monthly chaining of domestic steel-price anchor | API | DOCUMENTED / live validation required | Validate table/variable/classification and returned periods |
+| IBGE SIDRA — IPP 242-Siderurgia (table 6723) | Monthly chaining of domestic steel-price anchor | API | VERIFIED live for IPIA-HRC (see `docs/METODOLOGIA.md` §12.9) | Series switched from CNAE 24 "Metalurgia" to industrial group 242 "Siderurgia" (ADR/Stage documented in METODOLOGIA §12.9) — this row previously said "IPP Metalurgia" / table 6903, which is stale |
 | Instituto Aço Brasil | Steel production/trade/apparent consumption/import penetration | HTML + PDF/XLS | DOCUMENTED / partial implementation | Validate workbook/table schema and record publication vintage |
 | Curated public company releases | Quarterly domestic price anchor | versioned curated CSV | VERIFIED per curated evidence | Preserve source company, quarter, type/proxy classification and derivation |
 | BCB SCR.data | Future credit-condition index inputs | ZIP/open data | DOCUMENTED | Validate CNAE representation and ODbL obligations before derived-dataset distribution |

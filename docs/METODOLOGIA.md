@@ -538,6 +538,202 @@ quantitativa (distribuição de coverage, sensibilidade econômica do II
 desconhecido, teste de limiares candidatos) em
 `docs/research/hrc_import_policy_history.md`.
 
+## 9.6 Câmbio (FX)
+
+Documentação explícita e reprodutível do tratamento cambial usado no PPI —
+sem alterar a implementação atual nesta etapa.
+
+- **Fonte:** BCB/SGS, série `1` — "Taxa de câmbio - Livre - Dólar americano
+  (venda) - diário" (PTAX venda).
+- **Frequência da fonte:** diária.
+- **Moeda:** BRL por USD, venda (não compra, não paralela).
+- **Regra de agregação para o período mensal do Comex Stat:** a série diária
+  é reindexada para o índice mensal dos dados de importação com
+  `method="ffill"` (`indices_setoriais.py`, funções `_comex_bobina_hrc_v2_mensal`
+  e `_pipeline_cambio_historico_seguro`) — ou seja, **cada mês recebe a
+  última cotação PTAX venda observada até (e incluindo) aquele mês**, não
+  uma média mensal. Na prática isso se aproxima do câmbio de fechamento do
+  período, não do câmbio médio do período.
+- **Dias sem cotação:** carregados adiante (forward-fill) a partir da última
+  cotação diária válida; nenhuma interpolação, nenhuma projeção. Se não
+  houver nenhuma cotação anterior disponível, o valor permanece `NaN`
+  (nunca fabricado).
+- **Correspondência temporal com o Comex Stat:** o Comex Stat publica valor
+  FOB/frete/seguro agregados por mês-calendário; o câmbio de referência de
+  cada mês é a cotação diária mais recente dentro (ou antes) desse
+  mês-calendário, pelo mesmo índice de datas mensal usado para o restante
+  da série de importação.
+- **Limite operacional da fonte:** a API do BCB/SGS rejeita (HTTP 406)
+  janelas de consulta de série diária maiores que ~10 anos; a coleta é
+  particionada em blocos de até 10 anos e concatenada
+  (`_pipeline_cambio_historico_seguro`). Nunca usa `/dados/ultimos/N`
+  (proibido pelo projeto — ver `docs/data-sources.md`).
+- **Nível de proveniência:** `OBSERVADO` — valor direto da fonte, sem
+  fórmula própria (`classificar_cambio()`, `indices_setoriais.py`).
+
+**Item aberto, não resolvido nesta etapa:** a pesquisa original
+(`references/manual_metodologico_indices_setoriais.md` §5.2) descreve a
+intenção como "câmbio PTAX **médio** do mês", mas a implementação em
+produção usa a **última cotação disponível até o mês** (efetivamente um
+câmbio de fechamento/ponto, via forward-fill), não uma média das cotações
+diárias do mês. As duas convenções produzem valores diferentes e ambas são
+defensáveis (fechamento reflete a data de referência do lote de importação;
+média suaviza volatilidade intramensal). **Nenhuma mudança é feita agora** —
+ver §26 para o registro desta divergência como limitação conhecida e
+critério de reabertura futura (decisão Level 3, pois mudaria valores
+publicados).
+
+## 9.7 Viés de valor unitário (unit value bias)
+
+O preço FOB de importação usado no PPI (§9.1) é, por construção, um **valor
+unitário observado** (`Valor FOB_t / Peso Líquido_t`), não uma cotação de
+preço em sentido estrito (price assessment). Essa distinção é reconhecida
+na literatura de índices de preços de comércio exterior — ver *Export and
+Import Price Index Manual* (IMF/ILO/OECD/Eurostat/UN/World Bank, 2009),
+que trata unit values como um substituto imperfeito de um índice de preço
+puro justamente pela possibilidade de viés de composição.
+
+**Por que um valor unitário não é equivalente a um índice puro de preço:**
+mesmo calculado em granularidade `mês × NCM (8 dígitos) × país de origem`
+(§9.5.2), uma única posição de NCM ainda pode agrupar produtos com
+espessura, largura, grau do aço, acabamento e condições comerciais
+diferentes. Uma variação no FOB/kg observado em um mês pode refletir:
+
+1. uma mudança real no preço pago por um produto comparável; **ou**
+2. uma mudança na composição/mix de qualidade dentro da própria NCM (por
+   exemplo, substituição de um fornecedor/especificação por outro), sem
+   que o preço de um produto comparável tenha mudado.
+
+**O que a agregação bottom-up (mês × NCM × país, §9.5.2) resolve e o que
+não resolve:** ela reduz o viés de composição *entre* categorias distintas
+(não mistura, por exemplo, NCMs com produtos claramente diferentes num
+único número, nem aplica uma alíquota de política comercial incorreta a um
+grupo heterogêneo). Ela **não elimina** o viés de composição *dentro* de
+uma mesma NCM × país × mês, porque o Comex Stat não expõe especificação
+técnica (espessura/largura/grau/acabamento) abaixo do nível de NCM.
+
+**Implicação para a interpretação do IPIA-HRC:** variações mês a mês do
+PPI — em particular movimentos atípicos que não coincidem com movimentos
+de preço internacional conhecidos — podem, em parte, refletir mudança de
+mix de produto importado, não apenas variação de preço. Isso é uma
+limitação de dado, não um erro de cálculo, e não invalida o uso do Comex
+Stat como fonte: o valor unitário aduaneiro é o preço efetivamente
+realizado na fronteira brasileira, o que tem valor próprio distinto de uma
+cotação teórica de agência (`references/manual_metodologico_indices_setoriais.md`
+§5.1). Nenhuma conclusão empírica sobre a magnitude desse viés é feita
+aqui — isso exige validação contra um benchmark externo independente
+(CRU/Fastmarkets/Kallanish ou equivalente), explicitamente fora do escopo
+desta etapa (ver §26 e roadmap).
+
+**Esta etapa não altera a fórmula do PPI nem substitui o Comex Stat por
+causa deste gap.** O objetivo aqui é exclusivamente reconhecer e
+documentar a limitação.
+
+## 9.8 Classificação de proveniência dos parâmetros do PPI
+
+Auditoria completa dos componentes do PPI (§9.4), com a classificação de
+nível já definida em §4 (`OBSERVADO`/`CALCULADO`/`ESTIMADO`, eixo `PROXY`
+ortogonal). Nenhum parâmetro novo é introduzido; esta tabela apenas torna
+explícita a classificação de parâmetros que já existiam no código.
+
+| Parâmetro | Fórmula/origem atual | Fonte | Nível | Varia no tempo? | Granularidade | Vigência | Hipótese/observação |
+|---|---|---|---|---|---|---|---|
+| FOB | `ValorFOB_t / PesoLíquido_t` | Comex Stat `/general` | CALCULADO (valor unitário sobre observado — ver §9.7 para o viés associado) | Sim, por mês | mês × NCM × país | Sem vigência (recalculado a cada coleta) | Unit value, não price assessment — §9.7 |
+| Frete | `ValorFrete_t / Peso_t` | Comex Stat `/general` | CALCULADO | Sim, por mês, quando disponível na fonte | mês × NCM × país | Sem vigência | Precedência sobre parâmetro fixo aproximado quando observado (§9.2) |
+| Seguro | `ValorSeguro_t / Peso_t` | Comex Stat `/general` | CALCULADO | Sim, por mês, quando disponível na fonte | mês × NCM × país | Sem vigência | Idem frete |
+| Câmbio (FX) | PTAX venda, última cotação até o mês (forward-fill) | BCB/SGS série 1 | OBSERVADO | Sim, mensal (derivado de diário) | Mensal (mesmo câmbio para todos os NCMs/países no mês) | Sem vigência (série contínua) | Ver §9.6 para a regra completa e a divergência com a pesquisa original |
+| II (Imposto de Importação) | `resolver_ii(ncm, data)` | Legislação/TEC (Res. CAMEX/GECEX) | OBSERVADO | Sim, por NCM e por data (`valid_from`/`valid_to`) | NCM × período de vigência | `2022-04-01→presente`: PUBLICATION_GRADE; `2012-01-01→2022-03-31`: EXPERIMENTAL (9/13 NCMs não comprovados); fora dessa janela: UNKNOWN | Nunca usa alíquota atual como fallback para período sem regra comprovada (§9.5.1) |
+| AFRMM | `resolver_afrmm(data)` | Lei 10.893/2004 (25%) até 2022-03-24; Lei 14.301/2022 (8%) a partir de 2022-03-25 | OBSERVADO | Sim, por data (`valid_from`/`valid_to`) | Nacional, por período de vigência | Vigência legal explícita (duas faixas documentadas) | Aplicado somente sobre o frete (`Frete_USD × Câmbio × alíquota`), nunca sobre o CIF completo |
+| Antidumping | `resolver_antidumping(origin, data, exporter)` | Resoluções GECEX/CAMEX por origem/exportador | OBSERVADO | Sim, por origem/exportador/data (`valid_from`/`valid_to`) | País de origem × exportador × período | Medidas específicas documentadas (ex.: suspensão China/Rússia 2018-01–2020-01); usa sempre `effective_value`, nunca `nominal_value`, no custo | `nominal_value` preservado só como proveniência informativa |
+| D_porto (despesas portuárias) | Constante `ParamsIPIA.despesas_porto_rs_t` | Ponto de partida da pesquisa original (`references/manual_metodologico_indices_setoriais.md` §5.5) | **ESTIMADO** (hold-flat; nunca calibrado) | Não — constante única desde a origem do parâmetro | Nacional, sem distinção por período | Sem vigência — mesma constante aplicada retroativamente a toda a série | R$ 210/t. A pesquisa original identifica explicitamente este valor como "ponto de partida plausível para calibração, não medição", a ser calibrado com despachantes antes do primeiro release — calibração nunca realizada (ver §26) |
+| D_interno (frete interno porto→cliente) | Constante `ParamsIPIA.frete_interno_rs_t` | Idem acima | **ESTIMADO** (hold-flat; nunca calibrado) | Não | Nacional, rota de referência não publicada | Sem vigência | R$ 140/t. Mesma ressalva de calibração pendente; rota de referência assumida não está documentada |
+| Margem do importador | Constante `ParamsIPIA.margem_importador` | Idem acima | **ESTIMADO** (hold-flat; nunca calibrado) | Não | Nacional | Sem vigência | 3%. Pesquisa original: "zere se quiser medir custo puro em vez de preço ofertado" — decisão de manter em 3% nunca formalizada além do valor default do código |
+
+**Nota sobre a coluna Nível:** FOB/Frete/Seguro são `CALCULADO` (razão
+determinística sobre um valor observado, sem estimativa) e não `OBSERVADO`
+puro, seguindo a definição de §4 — o valor unitário em si não deixa de
+carregar o viés de composição descrito em §9.7, que é uma propriedade do
+dado de origem, não do rótulo de proveniência.
+
+## 9.9 D_porto, D_interno e margem — histórico e justificativa da constância
+
+Investigação específica pedida para estes três parâmetros:
+
+- **Valores em uso:** R$ 210/t (D_porto), R$ 140/t (D_interno), 3% (margem)
+  — `ParamsIPIA`, `src/indices_setoriais.py`.
+- **Origem:** os três vêm, sem alteração, da pesquisa metodológica original
+  (`references/manual_metodologico_indices_setoriais.md` §5.5), que os
+  apresenta explicitamente como *pontos de partida plausíveis para
+  calibração*, não como medições.
+- **Desde quando estão em uso:** desde a implementação do motor de cálculo
+  do PPI (não há registro de nenhuma revisão de valor no histórico do
+  repositório).
+- **São fixos?** Sim — constantes escalares únicas aplicadas a toda a
+  série histórica e a toda a série futura até serem alteradas
+  manualmente. Não são corrigidos por inflação, não têm vigência
+  (`valid_from`/`valid_to`), não variam por mês/ano.
+- **Existe fonte documentada?** Não além da pesquisa original citada
+  acima. Nenhum ADR ou spec formaliza uma calibração.
+- **Existem testes?** Há teste de regressão que trava os valores atuais
+  como constantes conhecidas (`tests/unit/test_ppi_parametros_e_cambio.py`,
+  adicionado nesta etapa) — não havia nenhum antes.
+- **Por que permanecem constantes nesta etapa:** o próprio código já
+  reconhece a limitação (`ParamsIPIA.__doc__`: "O único bloco subjetivo do
+  índice — publique estes números junto com o índice e revise uma vez por
+  ano"). Alterar os valores sem a calibração empírica pedida pela pesquisa
+  original (contato com despachantes aduaneiros) seria trocar um
+  placeholder não medido por outro placeholder não medido, sem ganho de
+  veracidade — e mudaria toda a série histórica publicada sem justificativa
+  metodológica (proibido por este documento). Portanto: apenas
+  classificação e documentação nesta etapa, sem mudança de valor.
+- **Impacto no PPI (materialidade):** ver §9.10 — dos três, a margem tem o
+  maior impacto por ponto percentual de choque; D_porto e D_interno têm
+  impacto comparativamente pequeno.
+- **Existe fonte melhor já presente no projeto?** Não identificada nesta
+  auditoria.
+- **Seria necessário construir uma série temporal?** Nenhuma variação
+  documentada ao longo do tempo foi encontrada para estes três parâmetros
+  — não há evidência de que precisem ser time-varying (ao contrário de
+  II/AFRMM/antidumping, que têm mudanças legais documentadas). Se uma
+  fonte de custo portuário/frete rodoviário/margem de trading ao longo do
+  tempo for identificada no futuro, a decisão de torná-los time-varying é
+  Level 3 (muda valores publicados) e requer spec/ADR próprios.
+- **O problema exige mudança metodológica ou apenas documentação?**
+  Apenas documentação nesta etapa (classificação `ESTIMADO` + registro da
+  calibração pendente). A calibração em si (contato com despachantes,
+  conforme a pesquisa original já recomendava) é trabalho de próxima etapa,
+  fora do escopo definido aqui.
+
+## 9.10 Sensibilidade dos parâmetros estimados
+
+Uma análise de sensibilidade sobre os parâmetros do PPI — incluindo os três
+classificados como `ESTIMADO` em §9.8 — já foi executada em
+`docs/validation/ipia_hrc_v2_final_validation.md` §11 (Stage G3), sobre o
+mês-base 2019-02 (PPI = R$ 3.107,39/t), por simulação pura (nenhum
+parâmetro default alterado):
+
+| Choque | ΔPPI | ΔIPIA |
+|---|---|---|
+| FX ±10% | ±8,84% | ∓8,84% |
+| FOB ±10% | ±7,96% | ∓7,96% |
+| Margem do importador +5pp | +4,85% | -4,85% |
+| Frete internacional +20% | +1,72% | -1,72% |
+| D_porto (custo portuário) +20% | +1,39% | -1,39% |
+| D_interno (frete interno) +20% | +0,93% | -0,93% |
+
+**Leitura:** todos os sinais são economicamente corretos (choque de custo
+positivo → PPI sobe → IPIA cai). Ordenação de materialidade: **FX > FOB >
+margem > frete internacional > D_porto > D_interno**. Isso distingue, entre
+os parâmetros `ESTIMADO`, hipóteses estruturalmente importantes (margem,
+com impacto de quase 5% do IPIA para um choque de 5 pontos percentuais) de
+hipóteses pouco materiais (D_porto e D_interno, com impacto abaixo de 1,5%
+mesmo para um choque de 20%). Uma futura calibração de D_porto/D_interno
+tem, portanto, prioridade menor que uma eventual revisão da margem do
+importador — mas ambas seguem sem calibração formal nesta etapa (§9.9).
+Esta análise não foi refeita nesta etapa por já cobrir exatamente os
+parâmetros e o formato de choque pedidos; nenhum novo cenário foi
+necessário.
+
 ---
 
 # 10. NCMs do IPIA
@@ -1500,7 +1696,22 @@ Princípios:
   permanece peça de cálculo interna/testada até uma decisão explícita de
   publicação;
 - disponibilidade histórica de frete/seguro precisa ser confirmada;
-- Aço Brasil estruturado ainda precisa ser validado.
+- Aço Brasil estruturado ainda precisa ser validado;
+- o preço FOB de importação é um valor unitário (`Valor FOB / Peso`), não
+  um price assessment puro — viés de composição/mix de qualidade dentro da
+  NCM não é eliminado pela agregação bottom-up por NCM×país (§9.7);
+  validação contra benchmark externo independente ainda não foi feita;
+- `D_porto` (R$ 210/t), `D_interno` (R$ 140/t) e a margem do importador
+  (3%) são constantes `ESTIMADO` (hold-flat) herdadas sem alteração da
+  pesquisa metodológica original, nunca calibradas com despachantes
+  aduaneiros conforme a própria pesquisa recomendava (§9.8, §9.9). Impacto
+  no IPIA é pequeno para D_porto/D_interno e moderado para a margem
+  (§9.10) — nenhum dos três bloqueia publicação, mas nenhum tem fonte
+  primária documentada;
+- o câmbio de referência do PPI é a última cotação PTAX venda disponível
+  até o mês (forward-fill), não uma média mensal como a pesquisa original
+  presumia (§9.6) — divergência documentada, não resolvida; reabri-la
+  exigiria decisão Level 3 por mudar valores publicados.
 
 ## IPIA-Vergalhão
 - cesta NCM final não está congelada;

@@ -1020,7 +1020,7 @@ An index is publication-ready only when:
 - methodology is versioned;
 - limitations are documented.
 
-For IPIA V2, the four methodology blockers defined in `docs/METODOLOGIA.md` remain mandatory gates.
+For IPIA V2, the four methodology blockers defined in `docs/METODOLOGIA.md` §15 are mandatory gates that must be reconciled per product/window before publication. As of ADR 0013, they are reconciled (closed or not-applicable) specifically for IPIA-HRC within the 2019-02+ window — this closure does not extend to IPIA-Vergalhão, to any pre-2019 backfill, or to Aço-Brasil-dependent auxiliary indicators, which retain their original open status until reconciled on their own evidence (`docs/METODOLOGIA.md` §15).
 
 ---
 
