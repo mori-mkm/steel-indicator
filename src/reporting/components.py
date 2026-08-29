@@ -377,6 +377,72 @@ def grafico_barras_horizontais(fig, x: float, y: float, largura: float, altura: 
     return ax
 
 
+def grafico_waterfall(ax, rotulo_inicio: str, valor_inicio: float,
+                      contribuicoes: Sequence[tuple], rotulo_fim: str, valor_fim: float,
+                      cor_positivo: str = t.COR_POSITIVO, cor_negativo: str = t.COR_NEGATIVO,
+                      cor_extremo: str = t.COR_ACCENT_2, formato_valor: str = "{:+.1f}") -> None:
+    """Waterfall: comeca em `valor_inicio`, aplica cada contribuicao de
+    `contribuicoes` (lista de (rotulo, valor) - JA na ordem de exibicao
+    desejada pelo chamador, ex. maior |contribuicao| primeiro, com um
+    grupo "Outros" pre-agregado se o chamador decidiu agrupar - esta
+    funcao nunca decide o que agrupar, so desenha) empilhada como barra
+    flutuante, e termina em `valor_fim`. A soma de `valor_inicio` + todas
+    as contribuicoes deve fechar em `valor_fim` (responsabilidade do
+    chamador garantir isso - ex. via Shapley exato, que fecha por
+    construcao); esta funcao so desenha o que recebe, nunca ajusta
+    residuo.
+
+    Barras positivas e negativas usam cores distintas (nunca a mesma cor
+    para "sobe"/"desce"); as barras de inicio/fim (nivel absoluto, nao
+    contribuicao) usam `cor_extremo`, visualmente distinta das duas
+    anteriores."""
+    rotulos = [rotulo_inicio] + [r for r, _ in contribuicoes] + [rotulo_fim]
+    n = len(rotulos)
+    x = list(range(n))
+    base_acumulado = valor_inicio
+
+    for i, (_, valor) in enumerate(contribuicoes, start=1):
+        topo = base_acumulado + valor
+        inferior, altura = (base_acumulado, valor) if valor >= 0 else (topo, -valor)
+        cor = cor_positivo if valor >= 0 else cor_negativo
+        ax.bar(x[i], altura, bottom=inferior, color=cor, width=0.6, zorder=3)
+        y_rotulo = topo + (abs(valor_fim - valor_inicio) * 0.03 if valor >= 0 else
+                          -abs(valor_fim - valor_inicio) * 0.03)
+        va = "bottom" if valor >= 0 else "top"
+        ax.text(x[i], y_rotulo, formato_valor.format(valor), ha="center", va=va,
+               fontsize=7.5, color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
+        # linha conectora fina entre o topo desta barra e a proxima
+        ax.plot([x[i] + 0.3, x[i] + 1 - 0.3], [topo, topo], color=t.COR_LINHA_GRADE,
+               linewidth=0.8, zorder=1)
+        base_acumulado = topo
+
+    ax.bar(x[0], valor_inicio, color=cor_extremo, width=0.6, zorder=3)
+    ax.text(x[0], valor_inicio, formato_valor.format(valor_inicio).replace("+", ""),
+           ha="center", va="bottom", fontsize=8, fontweight="bold",
+           color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
+    ax.bar(x[-1], valor_fim, color=cor_extremo, width=0.6, zorder=3)
+    ax.text(x[-1], valor_fim, formato_valor.format(valor_fim).replace("+", ""),
+           ha="center", va="bottom", fontsize=8, fontweight="bold",
+           color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(rotulos, fontsize=7.5, fontfamily=t.FONTE_SANS,
+                       color=t.COR_TEXTO_SECUNDARIO, rotation=20, ha="right")
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(t.COR_LINHA_GRADE)
+    ax.set_yticks([])
+    ax.grid(axis="y", color=t.COR_LINHA_GRADE, linewidth=0.5, zorder=0)
+    ax.set_axisbelow(True)
+    margem_y = max(abs(valor_inicio), abs(valor_fim), 1.0) * 0.18
+    valores_topo = [valor_inicio, valor_fim]
+    acumulado = valor_inicio
+    for _, valor in contribuicoes:
+        acumulado += valor
+        valores_topo.append(acumulado)
+    ax.set_ylim(min(valores_topo) - margem_y, max(valores_topo) + margem_y)
+
+
 def tabela_simples(fig, rect: tuple, colunas: Sequence[str], linhas: Sequence[Sequence[str]],
                    alinhar_direita_a_partir_de: int = 1) -> None:
     """Tabela desenhada manualmente: cabecalho com fundo COR_DESTAQUE_FUNDO,
