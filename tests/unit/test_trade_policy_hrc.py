@@ -279,6 +279,134 @@ def test_antidumping_dia_anterior_a_investigacao_sem_nenhuma_medida():
     assert "nenhuma medida" in r.nota
 
 
+# --- sprint "Import Policy Evidence Hardening" (VERIFIED): correcao de 4 ---
+# --- NCMs (10.8% -> 9%) + elevacao incondicional 865/2026 -----------------
+
+CORRIGIDOS_9PCT = ("72082610", "72082710", "72083610", "72083810")
+
+
+@pytest.mark.parametrize("ncm", CORRIGIDOS_9PCT)
+def test_correcao_9pct_antes_da_vigencia_permanece_unknown(ncm):
+    # 2012-2022-03 (historico) NAO foi alterado por esta correcao - os 4
+    # NCMs continuam UNKNOWN nesse periodo, exatamente como antes.
+    r = resolver_ii(ncm, pd.Timestamp("2022-03-31"))
+    assert r.aliquota is None
+    assert r.status == STATUS_UNKNOWN
+
+
+@pytest.mark.parametrize("ncm", CORRIGIDOS_9PCT)
+def test_correcao_9pct_inicio_exato_da_vigencia_2022_04_01(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2022-04-01"))
+    assert r.aliquota == pytest.approx(0.09)
+    assert r.status == STATUS_PUBLICATION_GRADE
+    assert "VERIFIED" in r.legal_basis
+
+
+@pytest.mark.parametrize("ncm", CORRIGIDOS_9PCT)
+def test_correcao_9pct_dentro_da_vigencia(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2023-06-15"))
+    assert r.aliquota == pytest.approx(0.09)
+    assert r.status == STATUS_PUBLICATION_GRADE
+
+
+@pytest.mark.parametrize("ncm", CORRIGIDOS_9PCT)
+def test_correcao_9pct_permanece_vigente_em_data_recente_sem_valid_to(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2026-01-01"))
+    assert r.aliquota == pytest.approx(0.09)
+    assert r.status == STATUS_PUBLICATION_GRADE
+
+
+# --- elevacao incondicional Res. GECEX 865/2026 (72082690/72082790) -------
+
+ELEVACAO_865_NCMS = ("72082690", "72082790")
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_antes_da_vigencia_e_aliquota_normal(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2026-02-25"))  # t-1
+    assert r.aliquota == pytest.approx(0.108)
+    assert r.status == STATUS_PUBLICATION_GRADE
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_inicio_exato_da_vigencia(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2026-02-26"))  # t
+    assert r.aliquota == pytest.approx(0.25)
+    assert r.status == STATUS_PUBLICATION_GRADE
+    assert "865" in r.legal_basis
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_dia_seguinte_ao_inicio_ainda_elevado(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2026-02-27"))  # t+1
+    assert r.aliquota == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_dentro_da_vigencia(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2026-08-01"))
+    assert r.aliquota == pytest.approx(0.25)
+    assert r.status == STATUS_PUBLICATION_GRADE
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_ultimo_dia_da_vigencia(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2027-02-25"))
+    assert r.aliquota == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_dia_seguinte_ao_fim_volta_ao_normal(ncm):
+    r = resolver_ii(ncm, pd.Timestamp("2027-02-26"))
+    assert r.aliquota == pytest.approx(0.108)
+    assert r.status == STATUS_PUBLICATION_GRADE
+
+
+@pytest.mark.parametrize("ncm", ELEVACAO_865_NCMS)
+def test_elevacao_865_nunca_e_unknown_case_a_incondicional_sem_cota(ncm):
+    # Case A (confirmado): 25% incondicional, nao ha ambiguidade de fluxo
+    # como na cota 929/2026 - a elevacao 865/2026 nunca produz UNKNOWN.
+    for data in (pd.Timestamp("2026-02-26"), pd.Timestamp("2026-12-01"), pd.Timestamp("2027-02-25")):
+        r = resolver_ii(ncm, data)
+        assert r.status != STATUS_UNKNOWN
+        assert r.aliquota is not None
+
+
+def test_elevacao_865_nao_afeta_ncms_da_cota_929_2026():
+    # mecanismos diferentes (resolucoes diferentes) - a elevacao 865/2026
+    # nunca deve vazar para os 4 NCMs ja cobertos pela cota 929/2026.
+    for ncm in ("72083700", "72083890", "72083910", "72083990"):
+        r = resolver_ii(ncm, pd.Timestamp("2026-07-01"))
+        assert r.status == STATUS_UNKNOWN  # continua a logica de cota, nao a de elevacao incondicional
+        assert "cota" in r.nota
+
+
+# --- regressao: NCMs nao afetados por nenhuma das duas correcoes ----------
+
+@pytest.mark.parametrize("ncm,data,aliquota_esperada", [
+    ("72081000", "2023-01-01", 0.108),
+    ("72082500", "2023-01-01", 0.108),
+    ("72083690", "2023-01-01", 0.108),
+    ("72083700", "2023-01-01", 0.108),
+    ("72083890", "2023-01-01", 0.108),
+    ("72083990", "2023-01-01", 0.108),
+    ("72083910", "2023-01-01", 0.09),  # excecao preexistente, nunca tocada
+])
+def test_ncms_nao_corrigidos_mantem_comportamento_identico(ncm, data, aliquota_esperada):
+    r = resolver_ii(ncm, pd.Timestamp(data))
+    assert r.aliquota == pytest.approx(aliquota_esperada)
+    assert r.status == STATUS_PUBLICATION_GRADE
+
+
+def test_regime_2012_2022_03_permanece_inalterado_para_os_4_codigos_confirmados():
+    # 72083700/72083890/72083990 continuam 12%, 72083910 continua 10% -
+    # a correcao desta etapa e so sobre 2022-04+, nunca sobre 2012-2022.
+    for ncm, esperado in (("72083700", 0.12), ("72083890", 0.12), ("72083990", 0.12), ("72083910", 0.10)):
+        r = resolver_ii(ncm, pd.Timestamp("2015-01-01"))
+        assert r.aliquota == pytest.approx(esperado)
+        assert r.status == STATUS_EXPERIMENTAL
+
+
 # --- fronteiras adicionais da cota 2026/27 (recomendacao do reviewer) ------
 
 def test_cota_dia_anterior_ao_inicio_ainda_e_aliquota_normal():

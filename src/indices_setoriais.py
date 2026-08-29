@@ -65,7 +65,7 @@ from steel_indicator.storage import vintage_store
 # 0. CONFIGURACAO
 # =============================================================================
 
-VERSAO_METODOLOGIA = "1.3"  # bump manual quando a metodologia de calculo mudar
+VERSAO_METODOLOGIA = "1.4"  # bump manual quando a metodologia de calculo mudar
 # (nao a cada commit) - referenciada em docs/METODOLOGIA.md e no painel
 # "Report Information" do relatorio PDF. 1.0 = motor inicial do IPIA;
 # 1.1 = suavizacao seletiva (ADR 0005) + taxa de penetracao de importacao
@@ -78,7 +78,17 @@ VERSAO_METODOLOGIA = "1.3"  # bump manual quando a metodologia de calculo mudar
 # validas (`calcular_fx_mensal`, ADR 0014) - muda valores publicados,
 # nunca a formula estrutural do PPI. Motor legado V1
 # (`calcular_ipia_mensal`/`custo_importacao_detalhado_mensal`)
-# deliberadamente NAO alterado (ver ADR 0014).
+# deliberadamente NAO alterado (ver ADR 0014). 1.4 = correcao regulatoria/
+# de fonte em `steel_indicator/parameters/trade_policy.py`
+# (`_ALIQUOTA_2022_TODOS_OS_13`): 4 NCMs (72082610/72082710/72083610/
+# 72083810) corrigidos de 10,8% para 9% (evidencia VERIFIED, planilha
+# oficial gov.br/mdic/camex) + elevacao tarifaria incondicional da Res.
+# GECEX 865/2026 sobre 72082690/72082790 (25% de 2026-02-26 a 2027-02-25),
+# antes nao modelada - muda valores publicados (inclusive 19 meses ja
+# OFFICIAL), nunca a formula estrutural do PPI nem a cesta NCM. Mesmo
+# criterio da 1.3 (ADR 0014): correcao de parametro/fonte com efeito
+# economico mensuravel bumpa a versao segundo METODOLOGIA.md Sec.24. Ver
+# docs/validation/hrc_import_policy_correction_migration.md.
 
 # --- Series SGS do Banco Central -------------------------------------------
 # VERIFICADAS AO VIVO nesta sessao (valores de jun/2026 conferidos):

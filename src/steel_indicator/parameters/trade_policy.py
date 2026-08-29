@@ -116,16 +116,26 @@ _ALIQUOTA_2012_CONHECIDA = {
     "72083990": 0.12,
     "72083910": 0.10,  # excecao ja em 2012
 }
+# CORRIGIDO (sprint "Import Policy Evidence Hardening", VERIFIED): 72082610/
+# 72082710/72083610/72083810 estavam em 0.108 - a planilha oficial
+# consolidada (gov.br/mdic/camex, Anexo I e Anexo II - TEC) confirma 9%,
+# mesma excecao "limite minimo de elasticidade 275/355 MPa" ja reconhecida
+# para 72083910 (mesma posicao estrutural ".10" dentro de cada faixa de
+# espessura). Ver docs/validation/hrc_import_policy_correction_migration.md.
 _ALIQUOTA_2022_TODOS_OS_13 = {
-    "72081000": 0.108, "72082500": 0.108, "72082610": 0.108, "72082690": 0.108,
-    "72082710": 0.108, "72082790": 0.108, "72083610": 0.108, "72083690": 0.108,
-    "72083700": 0.108, "72083810": 0.108, "72083890": 0.108, "72083990": 0.108,
+    "72081000": 0.108, "72082500": 0.108, "72082610": 0.09, "72082690": 0.108,
+    "72082710": 0.09, "72082790": 0.108, "72083610": 0.09, "72083690": 0.108,
+    "72083700": 0.108, "72083810": 0.09, "72083890": 0.108, "72083990": 0.108,
     "72083910": 0.09,  # excecao mantida
 }
 
 _LEGAL_BASIS_2012 = "Res. CAMEX 94/2011, Anexo I (SECONDARY_REPRODUCTION)"
 _LEGAL_BASIS_2022 = "Res. GECEX 272/2021, Anexo I"
 _LEGAL_BASIS_2022_NAO_REVERIFICADO = "Res. GECEX 272/2021, Anexo I (nao reverificado individualmente)"
+_LEGAL_BASIS_2022_CORRIGIDO = ("Res. GECEX 272/2021, Anexo I/II - planilha oficial consolidada "
+                               "gov.br/mdic/camex (VERIFIED; corrige valor anterior de 10.8% para 9%)")
+
+_NCMS_CORRIGIDOS_9PCT = ("72082610", "72082710", "72083610", "72083810")
 
 _NCMS_COM_COTA_929_2026 = ("72083700", "72083890", "72083910", "72083990")
 _SUBPERIODOS_COTA_929_2026 = (
@@ -134,6 +144,20 @@ _SUBPERIODOS_COTA_929_2026 = (
     (pd.Timestamp("2027-02-26"), pd.Timestamp("2027-06-25")),
 )
 
+# NOVO (sprint "Import Policy Evidence Hardening", VERIFIED): elevacao
+# tarifaria incondicional da Res. GECEX 865/2026 (Anexo IX-DCC) sobre
+# 72082690/72082790 - CASE A (25% aplica-se a todo o volume durante a
+# vigencia; confirmado ao vivo que a fonte oficial NAO lista colunas de
+# Quota/Unidade quota para essas duas linhas, ao contrario da cota
+# 929/2026 acima). Nunca misturar com o mecanismo de cota - resolucoes
+# diferentes, mecanismos diferentes.
+_NCMS_COM_ELEVACAO_865_2026 = ("72082690", "72082790")
+_ELEVACAO_865_2026_INICIO = pd.Timestamp("2026-02-26")
+_ELEVACAO_865_2026_FIM = pd.Timestamp("2027-02-25")
+_ALIQUOTA_ELEVACAO_865_2026 = 0.25
+_LEGAL_BASIS_865_2026 = ("Res. GECEX 865/2026, Anexo IX-DCC (elevacao tarifaria incondicional, sem "
+                         "mecanismo de cota - VERIFIED)")
+
 
 def _montar_tabela_ii() -> List[FaixaAliquotaII]:
     tabela: List[FaixaAliquotaII] = []
@@ -141,13 +165,30 @@ def _montar_tabela_ii() -> List[FaixaAliquotaII]:
         tabela.append(FaixaAliquotaII(ncm, pd.Timestamp("2012-01-01"), pd.Timestamp("2022-03-31"),
                                        aliquota_2012, _LEGAL_BASIS_2012))
     for ncm, aliquota_2022 in _ALIQUOTA_2022_TODOS_OS_13.items():
-        base_legal = _LEGAL_BASIS_2022 if ncm in _ALIQUOTA_2012_CONHECIDA else _LEGAL_BASIS_2022_NAO_REVERIFICADO
+        if ncm in _ALIQUOTA_2012_CONHECIDA:
+            base_legal = _LEGAL_BASIS_2022
+        elif ncm in _NCMS_CORRIGIDOS_9PCT:
+            base_legal = _LEGAL_BASIS_2022_CORRIGIDO
+        else:
+            base_legal = _LEGAL_BASIS_2022_NAO_REVERIFICADO
+
         if ncm in _NCMS_COM_COTA_929_2026:
             # a cota cobre 2026-06-26 a 2027-06-25; a aliquota normal vale
             # antes e depois dessa janela, nao durante.
             tabela.append(FaixaAliquotaII(ncm, pd.Timestamp("2022-04-01"), pd.Timestamp("2026-06-25"),
                                            aliquota_2022, base_legal))
             tabela.append(FaixaAliquotaII(ncm, pd.Timestamp("2027-06-26"), None,
+                                           aliquota_2022, base_legal))
+        elif ncm in _NCMS_COM_ELEVACAO_865_2026:
+            # elevacao incondicional (Case A): aliquota normal antes/depois,
+            # 25% durante a vigencia da Res. 865/2026 - nunca UNKNOWN aqui,
+            # ao contrario da cota 929/2026 (nao ha ambiguidade de fluxo).
+            tabela.append(FaixaAliquotaII(ncm, pd.Timestamp("2022-04-01"),
+                                           _ELEVACAO_865_2026_INICIO - pd.Timedelta(days=1),
+                                           aliquota_2022, base_legal))
+            tabela.append(FaixaAliquotaII(ncm, _ELEVACAO_865_2026_INICIO, _ELEVACAO_865_2026_FIM,
+                                           _ALIQUOTA_ELEVACAO_865_2026, _LEGAL_BASIS_865_2026))
+            tabela.append(FaixaAliquotaII(ncm, _ELEVACAO_865_2026_FIM + pd.Timedelta(days=1), None,
                                            aliquota_2022, base_legal))
         else:
             tabela.append(FaixaAliquotaII(ncm, pd.Timestamp("2022-04-01"), None, aliquota_2022, base_legal))

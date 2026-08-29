@@ -538,6 +538,47 @@ quantitativa (distribuição de coverage, sensibilidade econômica do II
 desconhecido, teste de limiares candidatos) em
 `docs/research/hrc_import_policy_history.md`.
 
+### 9.5.3 Correção regulatória de II (2022-04-01+): 4 NCMs + elevação Gecex nº 865/2026
+
+**Fonte oficial consolidada**: planilha estruturada gov.br/mdic/camex
+("Anexos I a X da Resolução Gecex nº 272/2021", Tier 1, atualizada
+periodicamente pelo próprio órgão) — <https://www.gov.br/mdic/pt-br/assuntos/camex/se-camex/strat/tarifas/vigentes>.
+Confirmada VERIFIED nesta correção, com dupla checagem independente
+(Anexo I - TEC e Anexo II - Diferentes da TEC, mesma planilha).
+
+**Revisão aplicada** (sprint "Import Policy Evidence Hardening", decisão
+Level 3 aprovada — registro completo em
+`docs/validation/hrc_import_policy_correction_migration.md`):
+
+- `72082610`, `72082710`, `72083610`, `72083810` corrigidos de 10,8% para
+  **9%** a partir de 2022-04-01 — mesma exceção "limite mínimo de
+  elasticidade 275/355 MPa" já reconhecida para `72083910`, agora
+  replicada corretamente às 4 posições `.10` que faltavam.
+- `72082690`/`72082790` passam a refletir a elevação tarifária
+  **incondicional** (sem cota) de **25%** entre 2026-02-26 e 2027-02-25
+  (Resolução Gecex nº 865/2026, Anexo IX-DCC) — antes não modelada;
+  fora dessa janela, permanecem em 10,8%.
+
+**Quota limitation (inalterado por esta revisão)**: a cota da Resolução
+Gecex nº 929/2026 (`72083700`/`72083890`/`72083910`/`72083990`,
+2026-06-26 a 2027-06-25) continua retornando `UNKNOWN` explícito durante
+seus sub-períodos — o volume/valor exato da cota já é conhecido (Tier 1),
+mas o mecanismo de alocação por fluxo/declaração permanece delegado à
+SECEX e não publicamente observável. Nenhuma tarifa foi atribuída a esse
+volume sem lastro.
+
+**Histórico ainda não resolvido**: 2012-01-01 a 2022-03-31 permanece
+`UNKNOWN` para 9 dos 13 NCMs (incluindo os 4 corrigidos acima, que só
+tiveram o regime **atual** — 2022-04+ — corrigido). Nenhuma tarifa
+histórica foi promovida ou aproximada nesta correção.
+
+**Impacto em valores publicados**: 48 de 78 meses calculáveis mudaram de
+PPI (nunca de `publication_status`), incluindo 19 meses já `OFFICIAL`
+(impacto máximo -0,49%). `VERSAO_METODOLOGIA` `1.3 → 1.4` (mesmo critério
+já usado na ADR 0014 — §24: correção de parâmetro/fonte com efeito
+econômico mensurável bumpa a versão). Nova vintage append-only persistida
+(ADR 0012); vintage anterior permanece byte-idêntica.
+
 ## 9.6 Câmbio (FX)
 
 **Convenção oficial (ADR 0014, motor V2 — `agregar_ipia_hrc_multi_ncm_mensal`,
@@ -1788,7 +1829,7 @@ Princípios:
 - preço doméstico ainda é majoritariamente proxy de segmento;
 - histórico doméstico ainda é curto;
 - NCMs ainda precisam de validação histórica;
-- parâmetros de internação (II/TEC, AFRMM, antidumping) têm modelo histórico mínimo versionado (`steel_indicator/parameters/trade_policy.py`, ADR 0009), mas II individual de 9 dos 13 NCMs permanece não comprovado para 2012-01–2022-03 (janela `historical experimental`, não publication-grade — ver ADR 0009);
+- parâmetros de internação (II/TEC, AFRMM, antidumping) têm modelo histórico mínimo versionado (`steel_indicator/parameters/trade_policy.py`, ADR 0009), mas II individual de 9 dos 13 NCMs permanece não comprovado para 2012-01–2022-03 (janela `historical experimental`, não publication-grade — ver ADR 0009). O regime **atual** (2022-04+) desses mesmos NCMs foi corrigido contra evidência VERIFIED (4 códigos de 10,8% para 9%, mais a elevação Gecex nº 865/2026 sobre 2 códigos adicionais) — ver §9.5.3 e `docs/validation/hrc_import_policy_correction_migration.md`;
 - `calcular_ipia_hrc_v2()` (`src/indices_setoriais.py`) já usa esse modelo histórico para o custo de importação, mas aplica a alíquota de **um único NCM informado pelo chamador** ao CIF já agregado dos 13 NCMs (mesma agregação de `serie_mensal_preco_bobina`) — sem ponderação por volume. Permanece assim, deliberadamente, como registro do que **não** fazer — não foi alterado por este batch;
 - a limitação de representatividade acima **foi resolvida** por
   `agregar_ipia_hrc_multi_ncm_mensal()`/`custo_importacao_bottom_up_mensal()`
