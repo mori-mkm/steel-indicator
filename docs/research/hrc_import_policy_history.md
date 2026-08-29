@@ -276,3 +276,70 @@ Novo ponto que a correção revelou: para a cota GECEX 929/2026, um modelo puram
 - `1997–2011` permanece fora de escopo desta e de qualquer implementação futura por ora (decisão já tomada na Stage E3, não revisitada aqui).
 - Nenhum valor de II é atribuído silenciosamente aos 9 códigos não comprovados no período experimental — o modelo implementado (`steel_indicator/parameters/trade_policy.py`) retorna `UNKNOWN` explícito para esses casos, não uma tarifa inferida.
 - Esta decisão **não é reaberta** nesta ou em tarefas subsequentes de implementação sem uma nova decisão Level 3 explícita.
+
+---
+
+## 8. Addendum (sprint "Import Policy Evidence Hardening", 2026-08-28)
+
+**Tipo:** validação empírica com evidência primária nova. **Não** altera
+`resolver_ii`, policy tables de produção, vintages, publication status,
+PPI, IPIA ou `VERSAO_METODOLOGIA`. Registro completo, com tabelas e
+contrafactual quantificado, em
+`docs/validation/hrc_import_policy_evidence_hardening.md` — esta seção é
+só o resumo que fecha o loop com a Seção 6 acima.
+
+**Evidência primária Tier 1 nova obtida**: planilha oficial consolidada
+gov.br/mdic/camex ("Anexos I a X da Resolução Gecex nº 272/2021",
+atualizada até a Resolução Gecex nº 812/2025 e nº 941/2026), baixada e
+parseada ao vivo. Duas descobertas verificadas (VERIFIED, confirmadas em
+duas abas independentes da mesma planilha oficial):
+
+1. **4 dos 13 NCMs têm alíquota errada em produção para o regime
+   2022-04+**: `72082610`, `72082710`, `72083610`, `72083810` estão
+   codificados em 10,8% (`_ALIQUOTA_2022_TODOS_OS_13`); a evidência
+   oficial confirma **9%** — mesma exceção de "limite mínimo de
+   elasticidade 275/355 MPa" já corretamente aplicada a `72083910`, mas
+   não replicada a esses 4 códigos na mesma posição estrutural `.10`.
+2. **2 NCMs sujeitos a uma elevação tarifária não modelada**: `72082690`
+   e `72082790` estão em **25%** (não 10,8%) desde 2026-02-26 até
+   2027-02-25 (Resolução Gecex nº 865/2026) — mecanismo diferente e mais
+   simples que a cota 929/2026 já modelada (sem sub-períodos, sem
+   componente intra-cota), completamente ausente de `trade_policy.py`.
+
+**O que a Seção 1.1.2/1.6 acima continua sem resposta**: o valor exato de
+II para os 9 códigos não confirmados em 2012-2022-03 **não foi
+determinado** nesta nova investigação — o mesmo esforço de busca pelo
+Anexo I da Resolução CAMEX 94/2011 (fonte primária de 2012) não teve
+sucesso adicional. Uma hipótese estrutural nova (INFERRED, não VERIFIED)
+foi registrada no documento de validação: a mesma divisão `.10`
+(exceção)/`.90` (padrão) confirmada no regime atual, combinada com
+`72083910` já ser a exceção conhecida em 2012 (10% vs. 12%), sugere que
+os outros 4 códigos `.10` da cesta provavelmente também eram 10% em 2012
+(não 12%) — mas isso não é promovido a evidência suficiente para
+publicação.
+
+**Cota GECEX 929/2026**: volumes exatos por sub-período (KG), antes
+`UNKNOWN`, agora extraídos da mesma planilha oficial (Anexo IX-DCC) — ver
+`docs/validation/hrc_import_policy_evidence_hardening.md` Seção 10. O
+mecanismo de alocação operacional (SECEX) continua não localizado
+publicamente.
+
+**Contrafactual quantificado** (mesma função de produção
+`agregar_ipia_hrc_multi_ncm_mensal`, rodada com a policy candidata via
+monkeypatch temporário, nunca modificando `trade_policy.py`): as duas
+correções **não fecham nenhum mês UNKNOWN/EXPERIMENTAL** — `publication_
+status` contrafactual é idêntico ao atual nos 90 meses testados. O que
+muda é o **valor** do PPI em 48 dos 78 meses calculáveis (-0,49% a
++5,60%), incluindo **19 meses já publicados na série OFFICIAL congelada**
+(2022-04–2023-12, impacto máximo -0,49%).
+
+**Status atualizado**: item 5 da Seção "Correções após revisão" original
+(a suposição de que 10,8%/9% valeriam desde 2012 estava errada) permanece
+válido e não é afetado por este addendum. O addendum é ortogonal: sobre a
+precisão do valor **dentro** do regime 2022-04+ já identificado como
+correto em data de transição, não sobre a data de transição em si.
+
+**Recomendação registrada no documento de validação**: `B — PARTIAL
+IMPLEMENTATION` — as duas correções do regime atual são candidatas fortes
+a uma futura decisão Level 3; a lacuna 2012-2022-03 permanece sem
+evidência suficiente para qualquer promoção.
