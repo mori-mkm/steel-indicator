@@ -32,7 +32,7 @@ Full detail lives in [`docs/METODOLOGIA.md`](docs/METODOLOGIA.md). Summary of th
 - antidumping/quota windows resolved per NCM and date;
 - BCB SGS exchange rate (date-bounded retrieval, never `/ultimos/N`);
 - observed freight and insurance where available, CIF build-up;
-- port/logistics costs and importer margin to a landed cost per tonne (PPI).
+- port/logistics costs to a landed cost per tonne (**PPI_COST** — the official series; since methodology 1.5/[ADR 0015](docs/adr/0015-ipia-hrc-import-parity-scope-cost-core-offer-layer.md), commercial margin is an optional analytical layer, **PPI_OFFER**, never part of the official landed cost).
 
 **Domestic side** — PIA-Produto (IBGE/SIDRA, table 7752, category 2422.2020) as the annual benchmark, distributed to a monthly series by the movement of IPP 242-Siderurgia via **Proportional Denton** (first-differences, constrained so the annual mean matches the PIA level). Declared PROXY on two independent grounds: PIA mixes domestic-market and export destinations (`DESTINATION_MIX`), and IPP 242 is a sector-wide index, not HRC-specific (`PRODUCT_AGGREGATION`). A Usiminas+CSN corporate-disclosure anchor (the V1 approach) remains as an independent validation benchmark, never used to calibrate the PIA-based series.
 
@@ -212,7 +212,7 @@ A separate legacy report path (`gerar_relatorio_ipia`, cost-decomposition + coun
 ## Methodology governance
 
 - [`docs/METODOLOGIA.md`](docs/METODOLOGIA.md) — official methodology, all products.
-- [`docs/adr/`](docs/adr/) — 13 accepted Architecture Decision Records, including the domestic-price anchor ([0001](docs/adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md)), the PIA-Produto benchmark ([0010](docs/adr/0010-pia-produto-hrc-benchmark-anual-proportional-denton.md)), the official/provisional split ([0011](docs/adr/0011-ipia-hrc-v2-status-provisional-e-series-oficial-provisional.md)), append-only vintages ([0012](docs/adr/0012-ipia-hrc-v2-vintages-append-only.md)), and the publication contract ([0013](docs/adr/0013-ipia-hrc-publication-contract.md)).
+- [`docs/adr/`](docs/adr/) — 15 accepted Architecture Decision Records, including the domestic-price anchor ([0001](docs/adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md)), the PIA-Produto benchmark ([0010](docs/adr/0010-pia-produto-hrc-benchmark-anual-proportional-denton.md)), the official/provisional split ([0011](docs/adr/0011-ipia-hrc-v2-status-provisional-e-series-oficial-provisional.md)), append-only vintages ([0012](docs/adr/0012-ipia-hrc-v2-vintages-append-only.md)), the publication contract ([0013](docs/adr/0013-ipia-hrc-publication-contract.md)), the PPI FX convention ([0014](docs/adr/0014-ppi-fx-convention-media-mensal.md)), and the import parity Cost/Offer scope ([0015](docs/adr/0015-ipia-hrc-import-parity-scope-cost-core-offer-layer.md)).
 - [`docs/validation/`](docs/validation/) and [`docs/decisions/`](docs/decisions/) — the evidence and readiness analysis behind the V2 publication decision.
 - [`docs/data-sources.md`](docs/data-sources.md) — source-by-source verification status and collection rules.
 - [`docs/architecture.md`](docs/architecture.md) — target software architecture and current migration state.

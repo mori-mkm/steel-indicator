@@ -25,8 +25,9 @@ decision - it just no longer describes "current production" for A.
 Does NOT alter any official vintage, the published official/provisional
 CSVs, or any production code. Purely analytical: builds two counterfactual
 FX series alongside the legacy one, recomputes PPI/IPIA with each
-(reusing the exact production formula, `indices_setoriais._ppi_brl_t`/
-`ipia`, never a reimplementation), and reports comparison statistics.
+(reusing the exact production formula, `indices_setoriais._ppi_cost_brl_t`
+(PPI_COST, no commercial margin since methodology 1.5/ADR 0015)/`ipia`,
+never a reimplementation), and reports comparison statistics.
 
 Reuses `data/processed/validation/ipia_hrc_v2_import_decomposition_panel.csv`
 (produced by `scripts/validar_ipia_hrc_v2_final.py`, Stage G3) as the source
@@ -155,15 +156,15 @@ def construir_convencoes_fx(cambio_diario: pd.Series, meses_idx: pd.DatetimeInde
 # =============================================================================
 
 def recompute_ppi(panel: pd.DataFrame, fx_alt: pd.Series) -> pd.Series:
-    """Reusa `indices_setoriais._ppi_brl_t` (mesma funcao que produz
-    `ppi_via_motor` no painel oficial) - nunca reimplementa a formula.
-    Os componentes FX-independentes (cif_usd_t, frete_usd_t, aliquotas,
-    antidumping, D_porto/D_interno/margem via ParamsIPIA) vem do painel;
-    so o cambio muda."""
+    """Reusa `indices_setoriais._ppi_cost_brl_t` (antes `_ppi_brl_t` - a
+    partir da metodologia 1.5/ADR 0015, esta funcao devolve PPI_COST, SEM
+    margem comercial) - nunca reimplementa a formula. Os componentes
+    FX-independentes (cif_usd_t, frete_usd_t, aliquotas, antidumping,
+    D_porto/D_interno via ParamsIPIA) vem do painel; so o cambio muda."""
     p = m.ParamsIPIA()
     cif_brl_alt = panel["cif_usd_t"] * fx_alt
-    return m._ppi_brl_t(cif_brl_alt, panel["aliquota_ii"], panel["frete_usd_t"],
-                         fx_alt, panel["aliquota_afrmm"], panel["antidumping_usd_t"], p)
+    return m._ppi_cost_brl_t(cif_brl_alt, panel["aliquota_ii"], panel["frete_usd_t"],
+                             fx_alt, panel["aliquota_afrmm"], panel["antidumping_usd_t"], p)
 
 
 # =============================================================================

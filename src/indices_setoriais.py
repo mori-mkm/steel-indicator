@@ -60,14 +60,32 @@ from steel_indicator.parameters.trade_policy import (
 )
 from steel_indicator.data.contracts import VALIDACAO_DOCUMENTADO, VALIDACAO_VERIFICADO
 from steel_indicator.storage import vintage_store
+from steel_indicator.domain.driver_decomposition import shapley_contributions
 
 # =============================================================================
 # 0. CONFIGURACAO
 # =============================================================================
 
-VERSAO_METODOLOGIA = "1.4"  # bump manual quando a metodologia de calculo mudar
+VERSAO_METODOLOGIA = "1.5"  # bump manual quando a metodologia de calculo mudar
 # (nao a cada commit) - referenciada em docs/METODOLOGIA.md e no painel
-# "Report Information" do relatorio PDF. 1.0 = motor inicial do IPIA;
+# "Report Information" do relatorio PDF. 1.5 = IPIA-HRC import parity scope:
+# decisao Level 3 aprovada (docs/validation/ipia_hrc_import_parity_scope.md,
+# ADR 0015) - a serie oficial (`agregar_ipia_hrc_multi_ncm_mensal`,
+# `calcular_ipia_hrc_v2_pia`) passa a usar PPI_COST (CIF+II+AFRMM+AD+
+# D_porto+D_interno, SEM margem comercial) em vez do PPI antigo (mesma soma
+# x (1+margem)) - a pesquisa original ja identificava essa ambiguidade
+# (`references/manual_metodologico_indices_setoriais.md` Sec.5.5: "zere se
+# quiser medir custo puro em vez de preco ofertado"), nunca resolvida ate
+# esta decisao. Margem comercial vira camada analitica opcional
+# (`calcular_ppi_offer`), nunca embutida silenciosamente no core - muda
+# valores publicados (toda a serie historica calculavel), nunca a formula
+# dos demais componentes (D_porto/D_interno/FX/II/AFRMM/antidumping
+# inalterados). Motor legado V1 (`custo_importacao_rs_t`,
+# `custo_importacao_historico_mensal`, `calcular_ipia_mensal`)
+# deliberadamente NAO alterado (mesmo criterio da ADR 0014) - continua
+# reproduzindo o PPI antigo (com margem) para --selftest/PDF legado. Ver
+# docs/validation/ipia_hrc_cost_offer_migration.md para o comparativo
+# completo antigo-vs-novo. 1.0 = motor inicial do IPIA;
 # 1.1 = suavizacao seletiva (ADR 0005) + taxa de penetracao de importacao
 # (ADR 0007); 1.2 = taxonomia OBSERVADO/CALCULADO/ESTIMADO/PROXY (ADR
 # 0008) + correcao do spread da decomposicao de custo, que podia misturar
@@ -1243,23 +1261,54 @@ LIMIAR_INCERTEZA_EXPERIMENTAL_PCT = 0.02  # decisao Level 3 aprovada
 TOL_COBERTURA_PUBLICATION_GRADE = 1e-6    # tolerancia numerica para "100% do kg observado com politica conhecida"
 
 
-def _ppi_brl_t(cif_brl_t, aliquota_ii, frete_usd_t, cambio_mes, aliquota_afrmm, antidumping_usd_t, p: ParamsIPIA):
-    """Mesma formula de custo de internacao de `custo_importacao_rs_t`/
-    `custo_importacao_historico_mensal` (CIF -> base -> total com margem),
-    fatorada para aceitar uma aliquota_ii hipotetica - usada tambem pela
-    faixa de incerteza (ppi_lower/ppi_upper) do periodo experimental."""
+def _ppi_cost_brl_t(cif_brl_t, aliquota_ii, frete_usd_t, cambio_mes, aliquota_afrmm, antidumping_usd_t, p: ParamsIPIA):
+    """PPI_COST: custo economico de internacao (CIF + II + AFRMM + AD +
+    D_porto + D_interno), SEM margem comercial - decisao Level 3 aprovada
+    (docs/validation/ipia_hrc_import_parity_scope.md, ADR 0015). Ate a
+    metodologia 1.4, esta funcao (entao `_ppi_brl_t`) multiplicava a base
+    por `(1 + p.margem_importador)`; a partir da 1.5, `p.margem_importador`
+    e IGNORADO aqui deliberadamente - a margem comercial passa a ser uma
+    camada analitica separada (`calcular_ppi_offer`), nunca embutida
+    silenciosamente no core. Fatorada para aceitar uma aliquota_ii
+    hipotetica - usada tambem pela faixa de incerteza (ppi_lower/ppi_upper)
+    do periodo experimental.
+
+    Nao altera D_porto/D_interno (`p.despesas_porto_rs_t`/
+    `p.frete_interno_rs_t`) nem nenhum outro componente - only a margem sai
+    do core.
+    """
     ii = cif_brl_t * aliquota_ii
     afrmm = (frete_usd_t * cambio_mes) * aliquota_afrmm
     ad_brl = antidumping_usd_t * cambio_mes
-    base = cif_brl_t + ii + afrmm + ad_brl + p.despesas_porto_rs_t + p.frete_interno_rs_t
-    return base * (1 + p.margem_importador)
+    return cif_brl_t + ii + afrmm + ad_brl + p.despesas_porto_rs_t + p.frete_interno_rs_t
+
+
+def calcular_ppi_offer(ppi_cost, margem_importador: float):
+    """PPI_OFFER: camada analitica OPCIONAL sobre `PPI_COST`, representando
+    um cenario de preco ofertado por trading/importador
+    (`PPI_OFFER = PPI_COST * (1 + margem_importador)`) - decisao Level 3
+    aprovada (docs/validation/ipia_hrc_import_parity_scope.md, ADR 0015).
+
+    `margem_importador` e SEMPRE explicito (sem default) - nunca publica
+    3% (ou qualquer outro valor) como markup universal de trading; quem
+    chama esta funcao decide o cenario. `ppi_cost` aceita escalar, Series
+    ou array (multiplicacao elementwise) - funciona em qualquer
+    granularidade (por grupo mes x NCM x pais, ou ja agregado por mes).
+
+    NAO alimenta a serie oficial do IPIA-HRC por padrao
+    (`agregar_ipia_hrc_multi_ncm_mensal` usa PPI_COST) - existe para
+    cenarios/market intelligence/sensitivity, sempre rotulado como camada
+    analitica separada, nunca misturado com o core."""
+    return ppi_cost * (1 + margem_importador)
 
 
 def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
                                        p: Optional[ParamsIPIA] = None,
                                        exporter: Optional[str] = None) -> pd.DataFrame:
-    """Uma linha por (mes, ncm, pais) com custo de internacao unitario (R$/t)
-    e status, resolvendo II/AFRMM/antidumping via trade_policy ANTES de
+    """Uma linha por (mes, ncm, pais) com `ppi_cost_brl_t` (PPI_COST unitario,
+    R$/t - CIF+II+AFRMM+AD+D_porto+D_interno, SEM margem comercial desde a
+    metodologia 1.5/ADR 0015) e status, resolvendo II/AFRMM/antidumping via
+    trade_policy ANTES de
     qualquer soma entre NCMs ou paises (ADR 0009, decisao Level 3 do
     agregador bottom-up). `df_bruto` e o dado cru do Comex Stat (mesmo
     formato de `_comex_bobina_bruto`: colunas year/monthNumber/coNcm/ncm/
@@ -1309,17 +1358,17 @@ def custo_importacao_bottom_up_mensal(df_bruto: pd.DataFrame, cambio: pd.Series,
                    for a, b, c in zip(res_ii, res_afrmm, res_ad)]
 
     conhecido = g["status"] != STATUS_UNKNOWN
-    g["ppi_brl_t"] = np.nan
+    g["ppi_cost_brl_t"] = np.nan
     if conhecido.any():
         # guarda necessaria: quando NENHUM grupo do df de entrada e
         # conhecido (ex.: um mes real onde todos os NCMs importados caem
         # em cota/II nao confirmado), g.loc[conhecido, ...] fica vazio e
-        # `_ppi_brl_t` devolve um array vazio de dtype object - atribuir
+        # `_ppi_cost_brl_t` devolve um array vazio de dtype object - atribuir
         # isso a uma coluna float64 levanta LossySetitemError nesta versao
         # do pandas. O resultado correto (nenhuma linha calculada, todas
         # ja NaN pela linha acima) e o mesmo com ou sem a guarda - ela so
         # evita o crash quando nao ha nada a atribuir.
-        g.loc[conhecido, "ppi_brl_t"] = _ppi_brl_t(
+        g.loc[conhecido, "ppi_cost_brl_t"] = _ppi_cost_brl_t(
             g.loc[conhecido, "cif_brl_t"], g.loc[conhecido, "aliquota_ii"],
             g.loc[conhecido, "frete_usd_t"], g.loc[conhecido, "cambio_mes"],
             g.loc[conhecido, "aliquota_afrmm"], g.loc[conhecido, "antidumping_usd_t"], p)
@@ -1358,12 +1407,20 @@ def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
     `resolver_ii` (sem entrada nas tabelas de trade_policy) - nao ha ramo
     especial de "fora de escopo" aqui.
 
+    `ppi_rs_t` e PPI_COST (decisao Level 3 aprovada, ADR 0015/metodologia
+    1.5) - media ponderada por KG de `ppi_cost_brl_t`
+    (`custo_importacao_bottom_up_mensal`), SEM margem comercial. `ipia` usa
+    `ppi_rs_t` (PPI_COST), nunca PPI_OFFER. `ppi_offer_rs_t` e uma coluna
+    ANALITICA adicional (`calcular_ppi_offer(ppi_rs_t, p.margem_importador)`)
+    - cenario de preco ofertado usando a margem do `ParamsIPIA` recebido,
+    nunca usada para calcular `ipia` nem qualquer outra coluna oficial.
+
     Saida (uma linha por mes calculavel, `reference_period` = inicio do
-    mes): reference_period, preco_domestico_rs_t, ppi_rs_t, ipia,
-    publication_status, total_kg, known_policy_kg, unknown_policy_kg,
+    mes): reference_period, preco_domestico_rs_t, ppi_rs_t, ppi_offer_rs_t,
+    ipia, publication_status, total_kg, known_policy_kg, unknown_policy_kg,
     policy_coverage, ppi_lower, ppi_upper, ppi_uncertainty_range_pct.
-    Meses UNKNOWN mantem ppi_rs_t/ipia como NaN - nunca zero, nunca a
-    aliquota atual como substituto. `preco_domestico_rs_t` continua
+    Meses UNKNOWN mantem ppi_rs_t/ppi_offer_rs_t/ipia como NaN - nunca zero,
+    nunca a aliquota atual como substituto. `preco_domestico_rs_t` continua
     publicado mesmo em meses UNKNOWN (nao depende do lado de importacao).
     """
     if p is None:
@@ -1390,27 +1447,28 @@ def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
         linha = {"data": data, "total_kg": total_kg, "known_policy_kg": known_kg,
                  "unknown_policy_kg": unknown_kg, "policy_coverage": coverage,
                  "ppi_lower": np.nan, "ppi_upper": np.nan, "ppi_uncertainty_range_pct": np.nan,
-                 "ppi_rs_t": np.nan, "publication_status": STATUS_UNKNOWN}
+                 "ppi_rs_t": np.nan, "ppi_offer_rs_t": np.nan, "publication_status": STATUS_UNKNOWN}
 
         if data >= PUBLICATION_GRADE_INICIO:
             if total_kg - known_kg <= TOL_COBERTURA_PUBLICATION_GRADE * total_kg:
-                ppi = float(np.average(g["ppi_brl_t"], weights=g["kg"]))
-                linha.update(ppi_rs_t=ppi, ppi_lower=ppi, ppi_upper=ppi,
+                ppi = float(np.average(g["ppi_cost_brl_t"], weights=g["kg"]))
+                linha.update(ppi_rs_t=ppi, ppi_offer_rs_t=calcular_ppi_offer(ppi, p.margem_importador),
+                             ppi_lower=ppi, ppi_upper=ppi,
                              ppi_uncertainty_range_pct=0.0, publication_status=STATUS_PUBLICATION_GRADE)
             # senao: fica UNKNOWN/NaN acima - nunca redistribui peso no regime publication-grade
         elif coverage >= LIMIAR_COBERTURA_EXPERIMENTAL:
             conhecidos = g[g["status"] != STATUS_UNKNOWN]
-            ponto_estimado = float(np.average(conhecidos["ppi_brl_t"], weights=conhecidos["kg"]))
+            ponto_estimado = float(np.average(conhecidos["ppi_cost_brl_t"], weights=conhecidos["kg"]))
             if unknown_kg > 0:
                 desconhecidos = g[g["status"] == STATUS_UNKNOWN]
                 lo, up = FAIXA_II_NAO_CONFIRMADO_HISTORICO
-                ppi_lower_desc = _ppi_brl_t(desconhecidos["cif_brl_t"], lo, desconhecidos["frete_usd_t"],
+                ppi_lower_desc = _ppi_cost_brl_t(desconhecidos["cif_brl_t"], lo, desconhecidos["frete_usd_t"],
                                              desconhecidos["cambio_mes"], desconhecidos["aliquota_afrmm"],
                                              desconhecidos["antidumping_usd_t"], p)
-                ppi_upper_desc = _ppi_brl_t(desconhecidos["cif_brl_t"], up, desconhecidos["frete_usd_t"],
+                ppi_upper_desc = _ppi_cost_brl_t(desconhecidos["cif_brl_t"], up, desconhecidos["frete_usd_t"],
                                              desconhecidos["cambio_mes"], desconhecidos["aliquota_afrmm"],
                                              desconhecidos["antidumping_usd_t"], p)
-                soma_conhecido = (conhecidos["ppi_brl_t"] * conhecidos["kg"]).sum()
+                soma_conhecido = (conhecidos["ppi_cost_brl_t"] * conhecidos["kg"]).sum()
                 ppi_lower = (soma_conhecido + (ppi_lower_desc * desconhecidos["kg"]).sum()) / total_kg
                 ppi_upper = (soma_conhecido + (ppi_upper_desc * desconhecidos["kg"]).sum()) / total_kg
                 range_pct = (ppi_upper - ppi_lower) / ppi_lower if ppi_lower else np.nan
@@ -1420,7 +1478,9 @@ def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
 
             linha.update(ppi_lower=ppi_lower, ppi_upper=ppi_upper, ppi_uncertainty_range_pct=range_pct)
             if range_pct <= LIMIAR_INCERTEZA_EXPERIMENTAL_PCT:
-                linha.update(ppi_rs_t=ponto_estimado, publication_status=STATUS_EXPERIMENTAL)
+                linha.update(ppi_rs_t=ponto_estimado,
+                             ppi_offer_rs_t=calcular_ppi_offer(ponto_estimado, p.margem_importador),
+                             publication_status=STATUS_EXPERIMENTAL)
             # senao: fica UNKNOWN/NaN acima (ppi_lower/upper/range_pct ficam preservados p/ auditoria)
         # coverage < LIMIAR_COBERTURA_EXPERIMENTAL: fica UNKNOWN/NaN acima
 
@@ -1445,7 +1505,8 @@ def agregar_ipia_hrc_multi_ncm_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
         # sem isso, reset_index() abaixo criaria uma coluna "index", nao
         # "reference_period".
     out = out.reset_index()
-    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia", "publication_status",
+    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ppi_offer_rs_t", "ipia",
+            "publication_status",
             "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
             "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct"]
     return out[cols]
@@ -1556,7 +1617,7 @@ def preco_domestico_hrc_mensal_v2(caminho_csv: str = CAMINHO_PRECO_DOMESTICO_CSV
 # 3e. IPIA-HRC V2 completo - integracao import side + Domestic Price V2 (Stage E9)
 # =============================================================================
 
-_COLS_IMPORT_SIDE_V2 = ["reference_period", "ppi_rs_t", "publication_status", "total_kg",
+_COLS_IMPORT_SIDE_V2 = ["reference_period", "ppi_rs_t", "ppi_offer_rs_t", "publication_status", "total_kg",
                         "known_policy_kg", "unknown_policy_kg", "policy_coverage",
                         "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct"]
 
@@ -1654,8 +1715,8 @@ def calcular_serie_ipia_hrc_v2(ppi_mensal_df: pd.DataFrame | None = None,
     merged.loc[calculavel, "ipia_hrc_v2"] = ipia(
         merged.loc[calculavel, "preco_domestico_rs_t"], merged.loc[calculavel, "ppi_rs_t"])
 
-    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2", "publication_status",
-            "import_status",
+    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ppi_offer_rs_t", "ipia_hrc_v2",
+            "publication_status", "import_status",
             "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
             "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct",
             "anchor_reference_period", "anchor_price_rs_t", "companies_used", "ipp_series_id",
@@ -1978,7 +2039,8 @@ STATUS_PROVISIONAL = "PROVISIONAL"
 # extensao provisional pos-ultima-PIA de `preco_domestico_hrc_pia_v2`.
 
 _COLS_IPIA_HRC_V2_PIA_OFICIAL = [
-    "reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2", "publication_status",
+    "reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ppi_offer_rs_t", "ipia_hrc_v2",
+    "publication_status",
     "domestic_is_proxy",
     "import_status", "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
     "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct",
@@ -2055,7 +2117,12 @@ def calcular_ipia_hrc_v2_pia(ppi_mensal_df: pd.DataFrame | None = None,
     peca minima que torna o congelamento no fluxo normal possivel para quem
     orquestrar as execucoes (ver `scripts/gerar_ipia_hrc_v2_pia.py`).
 
-    Formula preservada, sem alteracao: IPIA = preco_domestico / ppi * 100.
+    Formula preservada, sem alteracao: IPIA = preco_domestico / ppi * 100 -
+    mas `ppi` (`ppi_rs_t`) e PPI_COST desde a metodologia 1.5 (ADR 0015,
+    docs/validation/ipia_hrc_import_parity_scope.md): a mesma soma de
+    componentes de antes, agora SEM margem comercial (que virou camada
+    analitica opcional, `ppi_offer_rs_t`/`calcular_ppi_offer`, nunca usada
+    para `ipia_hrc_v2`). Ate a 1.4, `ppi_rs_t` incluia a margem.
     """
     if ppi_mensal_df is None:
         # mesmo motivo/tecnica documentada em calcular_serie_ipia_hrc_v2:
@@ -2143,8 +2210,8 @@ def calcular_ipia_hrc_v2_pia(ppi_mensal_df: pd.DataFrame | None = None,
         for col in cols_congelar:
             merged.loc[meses_congelados, col] = merged.loc[meses_congelados, "reference_period"].map(congelado[col])
 
-    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ipia_hrc_v2", "publication_status",
-            "import_status",
+    cols = ["reference_period", "preco_domestico_rs_t", "ppi_rs_t", "ppi_offer_rs_t", "ipia_hrc_v2",
+            "publication_status", "import_status",
             "total_kg", "known_policy_kg", "unknown_policy_kg", "policy_coverage",
             "ppi_lower", "ppi_upper", "ppi_uncertainty_range_pct",
             "pia_reference_year", "pia_anchor_price_rs_t", "ipp_series_id",
@@ -2702,6 +2769,142 @@ def custo_importacao_detalhado_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
         "margem_rs_t": custo["ppi_brl_t"] - base,
         "ppi_brl_t": custo["ppi_brl_t"],
     })
+
+
+# =============================================================================
+# 3j. IPIA-HRC - Driver Decomposition (Stage H1)
+# =============================================================================
+# Decompoe a variacao mes-a-mes do IPIA-HRC (`ipia_t - ipia_{t-1}`, em
+# PONTOS de indice) em contribuicoes exatas por driver, via
+# `steel_indicator.domain.driver_decomposition.shapley_contributions`
+# (motor generico, sem premissa de IPIA especifica - ver docstring
+# daquele modulo para a comparacao completa de metodos e o custo
+# computacional). Esta secao contem SO a formula/wiring especifica do
+# IPIA-HRC (analoga a `agregar_ipia_hrc_multi_ncm_mensal` conter a formula
+# especifica do PPI_COST sobre o motor generico de `index_engine.py`).
+#
+# NAO altera PPI_COST, PPI_OFFER, IPIA, parametros, vintages ou
+# publication_status - e uma camada analitica DERIVADA da serie ja
+# publicada, nunca uma nova fonte de verdade economica. Nao conectado a
+# --selftest/CLI/relatorio nesta stage (mesmo status inicial que os
+# demais caminhos V2 ao serem introduzidos).
+#
+# Reparametrizacao FX-linear (por que `ii`/`afrmm` sao valores monetarios
+# em USD/t, nao aliquotas): a mesma identidade de `_ppi_cost_brl_t`,
+# rearranjada para que FX multiplique um UNICO agregado em USD/t
+# (FOB+frete+seguro+II+AFRMM+antidumping), preservando reconstrucao EXATA
+# do PPI_COST oficial (ver `docs/validation/ipia_hrc_driver_decomposition.md`
+# secao "Interaction treatment" para a prova algebrica completa e por que
+# a alternativa obvia - aliquota_ii efetiva x CIF agregado - diverge do
+# PPI_COST publicado quando NCMs com aliquotas diferentes tem CIF/t
+# tambem diferente, o mesmo achado ja documentado em `decompor_mes`,
+# scripts/validar_ipia_hrc_v2_final.py).
+
+DRIVERS_PPI_COST = ["domestic_price", "fob", "freight", "insurance", "fx",
+                    "ii", "afrmm", "antidumping", "d_porto", "d_interno"]
+DRIVERS_PPI_OFFER = DRIVERS_PPI_COST + ["margin"]
+
+NOMES_LEGIVEIS_DRIVERS_IPIA_HRC = {
+    "domestic_price": "Preço doméstico",
+    "fob": "Preço FOB",
+    "freight": "Frete internacional",
+    "insurance": "Seguro",
+    "fx": "Câmbio",
+    "ii": "Imposto de Importação",
+    "afrmm": "AFRMM",
+    "antidumping": "Antidumping",
+    "d_porto": "Despesas portuárias",
+    "d_interno": "Frete interno",
+    "margin": "Margem do importador",
+}
+
+DECOMPOSITION_METHOD_SHAPLEY_EXATO = "shapley_exact_subset_2^n"
+
+
+def _ppi_cost_de_drivers(fob: float, freight: float, insurance: float, fx: float,
+                         ii: float, afrmm: float, antidumping: float,
+                         d_porto: float, d_interno: float) -> float:
+    """PPI_COST a partir dos drivers da decomposicao (mesma identidade de
+    `_ppi_cost_brl_t`/`custo_importacao_bottom_up_mensal`, rearranjada para
+    ser linear em `fx` sobre TODO o agregado USD/t - `ii`/`afrmm` aqui sao
+    valores monetarios efetivos em USD/t (`ii_brl_t/cambio_mes`,
+    `afrmm_brl_t/cambio_mes` do mes, nunca aliquotas) para que a
+    reconstrucao feche exatamente contra o PPI_COST oficial mesmo com
+    NCMs heterogeneos agregados no mes - ver comentario da secao acima).
+    Nao reimplementa `_ppi_cost_brl_t` no sentido de fonte alternativa de
+    verdade: e a mesma soma de componentes, so parametrizada em valores
+    monetarios USD/t em vez de (CIF_brl, aliquotas) - `calcular_ppi_offer`
+    continua sendo reusado literalmente para a camada Offer, abaixo."""
+    return (fob + freight + insurance + ii + afrmm + antidumping) * fx + d_porto + d_interno
+
+
+def _f_ipia_hrc_cost(domestic_price: float, fob: float, freight: float, insurance: float,
+                     fx: float, ii: float, afrmm: float, antidumping: float,
+                     d_porto: float, d_interno: float) -> float:
+    ppi_cost = _ppi_cost_de_drivers(fob, freight, insurance, fx, ii, afrmm, antidumping, d_porto, d_interno)
+    return ipia(domestic_price, ppi_cost)
+
+
+def _f_ipia_hrc_offer(domestic_price: float, fob: float, freight: float, insurance: float,
+                      fx: float, ii: float, afrmm: float, antidumping: float,
+                      d_porto: float, d_interno: float, margin: float) -> float:
+    ppi_cost = _ppi_cost_de_drivers(fob, freight, insurance, fx, ii, afrmm, antidumping, d_porto, d_interno)
+    ppi_offer = calcular_ppi_offer(ppi_cost, margin)
+    return ipia(domestic_price, ppi_offer)
+
+
+def decompor_variacao_ipia_hrc(componentes_t_1: Dict[str, float], componentes_t: Dict[str, float],
+                               modo: str = "cost") -> dict:
+    """Decompoe `ipia_t - ipia_{t-1}` (em PONTOS de indice) em contribuicoes
+    exatas por driver, via Shapley (`steel_indicator.domain.driver_decomposition`).
+
+    `componentes_t_1`/`componentes_t`: dict com as chaves de `DRIVERS_PPI_COST`
+    (modo="cost") ou `DRIVERS_PPI_OFFER` (modo="offer", inclui `margin`) -
+    tipicamente derivado da reconstrucao granular de
+    `scripts/validar_ipia_hrc_v2_final.py::decompor_mes` (fob/freight/
+    insurance/fx/d_porto/d_interno diretos; `ii`=ii_brl_t/cambio_mes;
+    `afrmm`=afrmm_brl_t/cambio_mes; `antidumping`=antidumping_usd_t
+    efetivo) mais `domestic_price` (preco_domestico_rs_t da serie oficial)
+    e, em modo Offer, `margin`=`ParamsIPIA.margem_importador`.
+
+    modo="cost" (default, USADO PELA SERIE OFICIAL): margem NUNCA e um
+    driver - sua contribuicao e estruturalmente 0 (nao pertence ao
+    PPI_COST desde a metodologia 1.5/ADR 0015), nunca aparece no
+    resultado. modo="offer": inclui `margin` como driver adicional,
+    aplicado SOMENTE a analise opcional de PPI_OFFER, nunca a serie
+    oficial do IPIA-HRC.
+
+    Retorna um dict com: `delta_ipia` (=Shapley.delta_total), uma chave
+    por driver (contribuicao em pontos de IPIA), `residual`,
+    `abs_contribution_share` (dict por driver), `top_positive_driver`,
+    `top_negative_driver`, `dominant_driver`, `domestic_contribution`/
+    `import_cost_contribution` (rollup hierarquico Nivel 1 - Seção 17),
+    `decomposition_method`, `modo`. NAO inclui `reference_period`/
+    `previous_reference_period`/`vintage_id`/`methodology_version` - essa
+    proveniencia e responsabilidade do CHAMADOR (o script de orquestracao
+    conhece as datas/vintage; esta funcao e pura, sem I/O, reusavel para
+    qualquer par de periodos)."""
+    if modo not in ("cost", "offer"):
+        raise ValueError(f"modo deve ser 'cost' ou 'offer', recebido: {modo!r}")
+    drivers = DRIVERS_PPI_COST if modo == "cost" else DRIVERS_PPI_OFFER
+    f = _f_ipia_hrc_cost if modo == "cost" else _f_ipia_hrc_offer
+
+    resultado = shapley_contributions(f, componentes_t_1, componentes_t, drivers=drivers)
+
+    contribuicoes_import_cost = {k: v for k, v in resultado.contribuicoes.items() if k != "domestic_price"}
+    return {
+        "delta_ipia": resultado.delta_total,
+        "residual": resultado.residual,
+        **resultado.contribuicoes,
+        "abs_contribution_share": resultado.abs_contribution_share(),
+        "top_positive_driver": resultado.top_positive_driver(),
+        "top_negative_driver": resultado.top_negative_driver(),
+        "dominant_driver": resultado.dominant_driver(),
+        "domestic_contribution": resultado.contribuicoes.get("domestic_price", 0.0),
+        "import_cost_contribution": sum(contribuicoes_import_cost.values()),
+        "decomposition_method": DECOMPOSITION_METHOD_SHAPLEY_EXATO,
+        "modo": modo,
+    }
 
 
 # =============================================================================
@@ -3637,14 +3840,17 @@ def main():
         imprimir_resumo_publicacao_ipia_hrc(vintage["manifest"], vintage["official"], vintage["provisional"])
         sys.exit(0)
     if a.pdf_ipia:
-        # Stage G6: `--pdf-ipia` migrou do relatorio legado (V1, buscava ao
-        # vivo) para o relatorio IPIA-HRC V2 (PIA-based), gerado inteiramente
-        # a partir da ultima vintage ja publicada (`--ipia`) - nunca contata
-        # Comex/IBGE/BCB nem cria vintage nova aqui (mesma garantia
-        # estrutural de `--ipia-latest`, ver `gerar_relatorio_ipia_hrc` em
-        # `reporting/report_builder.py`). `--ano-ini`/`--ano-fim` nao se
-        # aplicam pelo mesmo motivo de `--ipia` (janela de publicacao ja
-        # fixada pela vintage).
+        # Reporting V3 (sprint "IPIA-HRC - REPORTING V3"): `--pdf-ipia` passa
+        # a gerar o relatorio V3 (market intelligence executivo, 4 paginas
+        # redesenhadas) por padrao - mesma garantia estrutural do V2 que
+        # substituiu (Stage G6): gerado inteiramente a partir da ultima
+        # vintage ja publicada (`--ipia`), nunca contata Comex/IBGE/BCB nem
+        # cria vintage nova aqui. O caminho V2 (`gerar_relatorio_ipia_hrc`)
+        # permanece intacto e testado (tests/unit/test_ipia_hrc_pdf_reporting.py)
+        # para quem precisar reproduzi-lo diretamente - so o CLI default
+        # mudou, nenhuma funcao V2 foi removida (Sec.43 do sprint).
+        # `--ano-ini`/`--ano-fim` nao se aplicam pelo mesmo motivo de `--ipia`
+        # (janela de publicacao ja fixada pela vintage).
         if a.ano_ini != 2020 or a.ano_fim != 2026:
             print("Aviso: --ano-ini/--ano-fim nao se aplicam ao relatorio do IPIA-HRC (janela "
                   "de publicacao ja fixada pela vintage) - ignorados nesta execucao.")
@@ -3653,15 +3859,24 @@ def main():
             print("Nenhuma vintage do IPIA-HRC foi publicada ainda - rode --ipia primeiro.")
             sys.exit(1)
         vintage = carregar_vintage_ipia_hrc_v2(vintage_id)
-        print(f"Gerando relatorio PDF do IPIA-HRC a partir da vintage {vintage_id} ...")
+        print(f"Gerando relatorio PDF do IPIA-HRC (V3) a partir da vintage {vintage_id} ...")
         # import local: reporting/ importa deste modulo (indices_setoriais.py
         # e so o motor de calculo, nunca importa reporting no nivel de modulo -
         # evita import circular, mesmo padrao ja usado para matplotlib/requests).
-        from reporting.report_builder import gerar_relatorio_ipia_hrc
+        from reporting.report_builder import (
+            gerar_relatorio_ipia_hrc_v3, carregar_decomposicao_se_disponivel,
+            carregar_componentes_mensais_se_disponivel,
+        )
         import os
         os.makedirs("data/processed", exist_ok=True)
         caminho = "data/processed/ipia_relatorio.pdf"
-        resultado = gerar_relatorio_ipia_hrc(caminho, vintage)
+        decomposicao_df = carregar_decomposicao_se_disponivel()
+        componentes_df = carregar_componentes_mensais_se_disponivel()
+        if decomposicao_df is None:
+            print("Aviso: artefato de decomposicao de drivers nao encontrado - relatorio sera gerado "
+                  "sem waterfall/narrativa de driver (rode scripts/gerar_ipia_hrc_driver_decomposition.py).")
+        resultado = gerar_relatorio_ipia_hrc_v3(caminho, vintage, decomposicao_df=decomposicao_df,
+                                                componentes_mensais_df=componentes_df)
         print(f"Vintage usada: {resultado['vintage_id']}")
         print(f"Relatorio salvo em {caminho} ({resultado['n_paginas']} paginas)")
         sys.exit(0)

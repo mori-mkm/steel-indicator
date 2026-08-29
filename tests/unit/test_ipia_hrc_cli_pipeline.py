@@ -36,7 +36,9 @@ _SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "g
 
 
 def _ppi_row(data, ppi=3900.0, status=STATUS_PUBLICATION_GRADE, **kw):
-    linha = {"reference_period": pd.Timestamp(data), "ppi_rs_t": ppi, "publication_status": status,
+    linha = {"reference_period": pd.Timestamp(data), "ppi_rs_t": ppi,
+             "ppi_offer_rs_t": ppi * 1.03,  # PPI_COST*(1+margem default) - so fixture, nunca lido pelo IPIA
+             "publication_status": status,
              "total_kg": 1e7, "known_policy_kg": 1e7, "unknown_policy_kg": 0.0, "policy_coverage": 1.0,
              "ppi_lower": ppi, "ppi_upper": ppi, "ppi_uncertainty_range_pct": 0.0}
     linha.update(kw)

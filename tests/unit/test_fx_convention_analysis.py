@@ -46,9 +46,11 @@ def test_construir_convencoes_fx_media_primeiro_e_ultimo_dia_do_mes():
 def test_recompute_ppi_reproduz_formula_de_producao_exatamente():
     """Mesmo caso de test_custo_importacao_historico.py (fob=600, frete=20,
     seguro=2, cambio=5, ii=0.108, afrmm=0.08) - garante que
-    `recompute_ppi` (reuso de `_ppi_brl_t`) bate com o calculo manual, nao
-    so com a propria producao (que ja usa `_ppi_brl_t` internamente - um
-    teste que so chamasse a mesma funcao dos dois lados nao provaria nada)."""
+    `recompute_ppi` (reuso de `_ppi_cost_brl_t`) bate com o calculo manual,
+    nao so com a propria producao (que ja usa `_ppi_cost_brl_t` internamente
+    - um teste que so chamasse a mesma funcao dos dois lados nao provaria
+    nada). Desde a metodologia 1.5/ADR 0015, `_ppi_cost_brl_t` e PPI_COST -
+    SEM o fator (1+margem) que a formula pre-1.5 aplicava."""
     panel = pd.DataFrame({
         "cif_usd_t": [622.0], "frete_usd_t": [20.0],
         "aliquota_ii": [0.108], "aliquota_afrmm": [0.08], "antidumping_usd_t": [0.0],
@@ -60,20 +62,22 @@ def test_recompute_ppi_reproduz_formula_de_producao_exatamente():
     cif_brl = 622.0 * 5.0
     ii = cif_brl * 0.108
     afrmm = (20.0 * 5.0) * 0.08
-    base = cif_brl + ii + afrmm + 0.0 + m.ParamsIPIA().despesas_porto_rs_t + m.ParamsIPIA().frete_interno_rs_t
-    esperado = base * (1 + m.ParamsIPIA().margem_importador)
+    esperado = cif_brl + ii + afrmm + 0.0 + m.ParamsIPIA().despesas_porto_rs_t + m.ParamsIPIA().frete_interno_rs_t
 
     assert resultado.iloc[0] == pytest.approx(esperado)
 
 
 def test_recompute_ppi_e_afim_em_fx():
-    """Para os demais componentes fixos, PPI(FX) e uma funcao AFIM de FX
-    (o cambio multiplica CIF/AFRMM/antidumping mas D_porto/D_interno/margem
-    nao dependem dele) - propriedade usada no relatorio para argumentar que
-    o residuo de reconstrucao do painel agregado (que nao afeta FX) nao
-    contamina a DIFERENCA entre convencoes. Se isso quebrar, a formula de
-    `_ppi_brl_t` deixou de ser afim em cambio e o argumento do relatorio
-    (docs/validation/fx_convention_validation.md) precisa ser revisto."""
+    """Para os demais componentes fixos, PPI_COST(FX) e uma funcao AFIM de
+    FX (o cambio multiplica CIF/AFRMM/antidumping mas D_porto/D_interno nao
+    dependem dele) - propriedade usada no relatorio para argumentar que o
+    residuo de reconstrucao do painel agregado (que nao afeta FX) nao
+    contamina a DIFERENCA entre convencoes. Vale igualmente antes/depois da
+    metodologia 1.5 (remover a margem so tira um fator multiplicativo
+    constante, que preserva afinidade em FX). Se isso quebrar, a formula de
+    `_ppi_cost_brl_t` deixou de ser afim em cambio e o argumento do
+    relatorio (docs/validation/fx_convention_validation.md) precisa ser
+    revisto."""
     panel = pd.DataFrame({
         "cif_usd_t": [700.0], "frete_usd_t": [30.0],
         "aliquota_ii": [0.12], "aliquota_afrmm": [0.25], "antidumping_usd_t": [10.0],

@@ -39,11 +39,15 @@ CSV_SAIDA = "data/processed/ipia_hrc_v2_validation_components.csv"
 
 def decompor_import_side(df_bruto: pd.DataFrame, ano_ini: int, ano_fim: int,
                           p: m.ParamsIPIA) -> pd.DataFrame:
-    """Reconstroi, por mes, os componentes do PPI bottom-up (mesma formula
-    de `custo_importacao_bottom_up_mensal`/`_ppi_brl_t` - nao reimplementada,
-    so agregada por mes com media ponderada por KG, que preserva a soma
-    porque `despesas_porto`/`frete_interno`/`margem` sao a mesma constante em
-    todo grupo do mes)."""
+    """Reconstroi, por mes, os componentes do PPI_COST bottom-up (mesma
+    formula de `custo_importacao_bottom_up_mensal`/`_ppi_cost_brl_t` - nao
+    reimplementada, so agregada por mes com media ponderada por KG, que
+    preserva a soma porque `despesas_porto`/`frete_interno` sao a mesma
+    constante em todo grupo do mes). Desde a metodologia 1.5/ADR 0015,
+    `_ppi_cost_brl_t` NAO inclui mais margem comercial - `ppi_reconstruido_rs_t`
+    abaixo e PPI_COST puro; `ppi_offer_reconstruido_rs_t` (camada analitica,
+    `calcular_ppi_offer`) e mantido so para referencia/comparacao contra o
+    comportamento pre-1.5."""
     datas = pd.to_datetime(df_bruto["year"].astype(str) + "-"
                             + df_bruto["monthNumber"].astype(str).str.zfill(2) + "-01")
     idx_mensal = pd.date_range(datas.min(), datas.max(), freq="MS")
@@ -73,8 +77,9 @@ def decompor_import_side(df_bruto: pd.DataFrame, ano_ini: int, ano_fim: int,
         frete_usd_t = wavg("frete_usd_t")
         cambio_mes = float(g["cambio_mes"].iloc[0])  # mesmo cambio p/ todo grupo do mes (reindex por mes)
 
-        base = cif_brl_t + ii_brl_t + afrmm_brl_t + ad_brl_t + p.despesas_porto_rs_t + p.frete_interno_rs_t
-        ppi_reconstruido = base * (1 + p.margem_importador)
+        ppi_cost_reconstruido = cif_brl_t + ii_brl_t + afrmm_brl_t + ad_brl_t \
+            + p.despesas_porto_rs_t + p.frete_interno_rs_t
+        ppi_offer_reconstruido = m.calcular_ppi_offer(ppi_cost_reconstruido, p.margem_importador)
 
         linhas.append({
             "reference_period": data,
@@ -92,7 +97,8 @@ def decompor_import_side(df_bruto: pd.DataFrame, ano_ini: int, ano_fim: int,
             "despesas_porto_rs_t": p.despesas_porto_rs_t,
             "frete_interno_rs_t": p.frete_interno_rs_t,
             "margem_importador_pct": p.margem_importador,
-            "ppi_reconstruido_rs_t": ppi_reconstruido,
+            "ppi_reconstruido_rs_t": ppi_cost_reconstruido,
+            "ppi_offer_reconstruido_rs_t": ppi_offer_reconstruido,
         })
     return pd.DataFrame(linhas).sort_values("reference_period").reset_index(drop=True)
 
@@ -174,7 +180,7 @@ def main() -> None:
         "fob_usd_t", "frete_usd_t", "seguro_usd_t", "cif_usd_t", "cambio", "cif_brl_t",
         "ii_brl_t", "afrmm_brl_t", "antidumping_brl_t", "aliquota_ii_efetiva", "aliquota_afrmm_efetiva",
         "despesas_porto_rs_t", "frete_interno_rs_t", "margem_importador_pct",
-        "ppi_rs_t", "ppi_reconstruido_rs_t", "ppi_reconstruido_delta_pct",
+        "ppi_rs_t", "ppi_reconstruido_rs_t", "ppi_offer_reconstruido_rs_t", "ppi_reconstruido_delta_pct",
         # indice
         "ipia_hrc_v2", "domestic_minus_ppi_rs_t", "domestic_premium_pct",
         "ipia_recomputado_da_formula", "ipia_check_delta",

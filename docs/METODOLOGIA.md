@@ -434,7 +434,61 @@ Seguro_t
 
 ## 9.4 Custo de importação / PPI
 
-Forma conceitual:
+**Decisão Level 3 aprovada (metodologia 1.5, ADR 0015,
+`docs/validation/ipia_hrc_import_parity_scope.md`)**: o IPIA-HRC oficial
+usa **PPI_COST** — a margem comercial do importador saiu do núcleo e virou
+camada analítica opcional (**PPI_OFFER**). Até a metodologia 1.4, o PPI
+oficial incluía a margem diretamente (forma antiga preservada abaixo, em
+"Fórmula pré-1.5", só para referência histórica — é o que a linhagem V1
+legada, `custo_importacao_rs_t`/`custo_importacao_historico_mensal`/
+`calcular_ipia_mensal`, continua calculando, deliberadamente inalterada).
+
+### PPI_COST (core oficial desde a 1.5)
+
+\[
+PPI\_COST_t =
+CIF_t \times FX_t
++
+II_t
++
+AFRMM_t
++
+AD_t
++
+D_{porto,t}
++
+D_{interno,t}
+\]
+
+onde:
+
+- `FX_t` = câmbio de referência do período;
+- `II_t` = imposto de importação vigente;
+- `AFRMM_t` = regra vigente no período;
+- `AD_t` = antidumping específico aplicável no período;
+- `D_porto` = despesas portuárias;
+- `D_interno` = frete interno de referência.
+
+`IPIA_HRC = preço_doméstico / PPI\_COST × 100` — fórmula do IPIA
+preservada (não muda a partir da 1.5), só a definição do `PPI` no
+denominador muda.
+
+### PPI_OFFER (camada analítica opcional, desde a 1.5)
+
+\[
+PPI\_OFFER_t = PPI\_COST_t \times (1 + margem_t)
+\]
+
+Implementada em `calcular_ppi_offer(ppi_cost, margem_importador)` —
+`margem_importador` é sempre explícito (sem default), nunca publica 3%
+(ou qualquer outro valor) como markup universal de trading. `PPI_OFFER`
+**nunca** alimenta `ipia_hrc_v2`/`ipia` — existe só para cenários, market
+intelligence e sensitivity, sempre rotulado como camada separada da série
+oficial. Ver §9.9 para o histórico da ambiguidade que motivou esta
+decisão e §9.8 para a classificação de proveniência atualizada da
+margem.
+
+### Fórmula pré-1.5 (referência histórica — motor V1 legado)
 
 \[
 PPI_t =
@@ -455,15 +509,13 @@ D_{interno,t}
 (1 + margem_t)
 \]
 
-onde:
-
-- `FX_t` = câmbio de referência do período;
-- `II_t` = imposto de importação vigente;
-- `AFRMM_t` = regra vigente no período;
-- `AD_t` = antidumping específico aplicável no período;
-- `D_porto` = despesas portuárias;
-- `D_interno` = frete interno de referência;
-- `margem` = margem do importador, quando aplicável.
+Esta é a fórmula que `custo_importacao_rs_t`/`custo_importacao_historico_mensal`/
+`calcular_ipia_mensal` (V1 legado, `--selftest`/PDF antigo) continuam
+calculando — deliberadamente não alterada pela decisão de escopo
+Cost/Offer, pelo mesmo critério já usado na ADR 0014 (referência
+histórica/comparação de bug fixes, protegida por characterization
+tests). Equivale a `PPI_OFFER` com a margem fixa de 3% (o valor default
+de `ParamsIPIA.margem_importador` desde a origem do parâmetro).
 
 ## 9.5 Parâmetros históricos
 
@@ -704,7 +756,7 @@ explícita a classificação de parâmetros que já existiam no código.
 | Antidumping | `resolver_antidumping(origin, data, exporter)` | Resoluções GECEX/CAMEX por origem/exportador | OBSERVADO | Sim, por origem/exportador/data (`valid_from`/`valid_to`) | País de origem × exportador × período | Medidas específicas documentadas (ex.: suspensão China/Rússia 2018-01–2020-01); usa sempre `effective_value`, nunca `nominal_value`, no custo | `nominal_value` preservado só como proveniência informativa |
 | D_porto (despesas portuárias) | Constante `ParamsIPIA.despesas_porto_rs_t` | Ponto de partida da pesquisa original (`references/manual_metodologico_indices_setoriais.md` §5.5) | **ESTIMADO** (hold-flat; nunca calibrado) | Não — constante única desde a origem do parâmetro | Nacional, sem distinção por período | Sem vigência — mesma constante aplicada retroativamente a toda a série | R$ 210/t. A pesquisa original identifica explicitamente este valor como "ponto de partida plausível para calibração, não medição", a ser calibrado com despachantes antes do primeiro release — calibração nunca realizada (ver §26) |
 | D_interno (frete interno porto→cliente) | Constante `ParamsIPIA.frete_interno_rs_t` | Idem acima | **ESTIMADO** (hold-flat; nunca calibrado) | Não | Nacional, rota de referência não publicada | Sem vigência | R$ 140/t. Mesma ressalva de calibração pendente; rota de referência assumida não está documentada |
-| Margem do importador | Constante `ParamsIPIA.margem_importador` | Idem acima | **ESTIMADO** (hold-flat; nunca calibrado) | Não | Nacional | Sem vigência | 3%. Pesquisa original: "zere se quiser medir custo puro em vez de preço ofertado" — decisão de manter em 3% nunca formalizada além do valor default do código |
+| Margem do importador | Constante `ParamsIPIA.margem_importador`, usada por `calcular_ppi_offer` — **fora do core `PPI_COST` desde a metodologia 1.5 (ADR 0015)** | Idem acima | **ESTIMADO / scenario parameter** (hold-flat; nunca calibrado) | Não | Nacional | Sem vigência | 3% (valor default preservado só por compatibilidade — `PPI_COST`/`ipia_hrc_v2` o ignoram). Pesquisa original: "zere se quiser medir custo puro em vez de preço ofertado" — a decisão Level 3 do sprint de escopo (docs/validation/ipia_hrc_import_parity_scope.md) resolveu essa ambiguidade a favor de custo puro no core, com a margem preservada como camada analítica opcional (`PPI_OFFER`) |
 
 **Nota sobre a coluna Nível:** FOB/Frete/Seguro são `CALCULADO` (razão
 determinística sobre um valor observado, sem estimativa) e não `OBSERVADO`
@@ -760,6 +812,18 @@ Investigação específica pedida para estes três parâmetros:
   calibração pendente). A calibração em si (contato com despachantes,
   conforme a pesquisa original já recomendava) é trabalho de próxima etapa,
   fora do escopo definido aqui.
+
+**Atualização (metodologia 1.5, ADR 0015) — margem sai do core**: a
+observação acima ("apenas documentação, sem mudança de valor") permanece
+válida para D_porto/D_interno, mas não mais para a margem. Um sprint de
+decisão conceitual posterior (`docs/validation/ipia_hrc_import_parity_scope.md`)
+resolveu explicitamente a ambiguidade Cost/Offer que a pesquisa original
+já registrava (§9.8) — decisão do usuário: **C — DUAL ARCHITECTURE**.
+`PPI_COST` (série oficial) não depende mais de `margem_importador`;
+`PPI_OFFER` (`calcular_ppi_offer`) é uma camada analítica opcional que a
+usa explicitamente, nunca como default silencioso. D_porto/D_interno
+continuam `ESTIMADO`/hold-flat, sem calibração, exatamente como
+descrito acima — esta decisão não os toca.
 
 ## 9.10 Sensibilidade dos parâmetros estimados
 

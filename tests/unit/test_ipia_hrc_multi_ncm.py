@@ -90,6 +90,16 @@ def test_dois_ncms_aliquotas_diferentes_agregam_por_kg():
     # ppi esperado: media dos dois PPIs individuais (mesma formula ja
     # aprovada de custo_importacao_historico_mensal), ponderada por kg -
     # NUNCA a aliquota de um unico NCM aplicada ao CIF combinado.
+    #
+    # `custo_importacao_historico_mensal` e V1 legado (deliberadamente NAO
+    # alterado pela decisao Level 3 de Cost/Offer, ADR 0015) - seu
+    # `ppi_brl_t` continua incluindo a margem de 3%. `out["ppi_rs_t"]` (o
+    # agregador V2 oficial, `agregar_ipia_hrc_multi_ncm_mensal`) passa a
+    # ser PPI_COST (sem margem) a partir da metodologia 1.5 - divide-se
+    # `ppi_brl_t` do legado por `(1+margem)` antes de comparar, para
+    # isolar exatamente o efeito testado aqui (agregacao bottom-up por KG),
+    # sem misturar a mudanca de escopo Cost/Offer no teste.
+    margem = m.ParamsIPIA().margem_importador
     cambio = pd.Series([5.0], index=[pd.Timestamp("2019-06-01")])
     c37 = m.custo_importacao_historico_mensal(
         pd.Series([600.0], index=cambio.index), pd.Series([20.0], index=cambio.index),
@@ -97,10 +107,12 @@ def test_dois_ncms_aliquotas_diferentes_agregam_por_kg():
     c39 = m.custo_importacao_historico_mensal(
         pd.Series([600.0], index=cambio.index), pd.Series([20.0], index=cambio.index),
         pd.Series([2.0], index=cambio.index), cambio, ncm="72083910")
-    esperado = (c37["ppi_brl_t"].iloc[0] * 6_000_000.0 + c39["ppi_brl_t"].iloc[0] * 4_000_000.0) / 10_000_000.0
+    custo37 = c37["ppi_brl_t"].iloc[0] / (1 + margem)
+    custo39 = c39["ppi_brl_t"].iloc[0] / (1 + margem)
+    esperado = (custo37 * 6_000_000.0 + custo39 * 4_000_000.0) / 10_000_000.0
     assert out["ppi_rs_t"] == pytest.approx(esperado)
     # top-down (aplicar 12% ao CIF combinado) daria um numero diferente
-    assert out["ppi_rs_t"] != pytest.approx(c37["ppi_brl_t"].iloc[0])
+    assert out["ppi_rs_t"] != pytest.approx(custo37)
 
 
 # --- 2. Politica (antidumping) resolvida por PAIS antes de agregar ----------
@@ -124,9 +136,10 @@ def test_antidumping_resolvido_por_pais_antes_de_agregar(monkeypatch):
     cambio = pd.Series([5.0], index=[pd.Timestamp("2024-06-01")])
     china = m.custo_importacao_bottom_up_mensal(pd.DataFrame([rows[0]]), cambio)
     outro = m.custo_importacao_bottom_up_mensal(pd.DataFrame([rows[1]]), cambio)
-    esperado = (china["ppi_brl_t"].iloc[0] * 6_000_000.0 + outro["ppi_brl_t"].iloc[0] * 4_000_000.0) / 10_000_000.0
+    esperado = (china["ppi_cost_brl_t"].iloc[0] * 6_000_000.0
+               + outro["ppi_cost_brl_t"].iloc[0] * 4_000_000.0) / 10_000_000.0
     assert out["ppi_rs_t"] == pytest.approx(esperado)
-    assert china["ppi_brl_t"].iloc[0] != outro["ppi_brl_t"].iloc[0]  # antidumping realmente mudou o custo por pais
+    assert china["ppi_cost_brl_t"].iloc[0] != outro["ppi_cost_brl_t"].iloc[0]  # antidumping mudou o custo por pais
 
 
 # --- 3. NCM sem importacao (kg=0) tem peso zero, nao distorce a media ------

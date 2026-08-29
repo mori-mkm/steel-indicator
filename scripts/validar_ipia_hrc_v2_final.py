@@ -190,9 +190,16 @@ def decompor_mes(grupos: pd.DataFrame, data: pd.Timestamp, p, import_status: str
     aliquota_afrmm_efetiva = float(np.average(usar["aliquota_afrmm"], weights=kg))
     antidumping_usd_t_efetivo = float(np.average(usar["antidumping_usd_t"], weights=kg))
 
-    base = cif_brl_t + ii_brl_t + afrmm_brl_t + ad_brl_t + p.despesas_porto_rs_t + p.frete_interno_rs_t
-    ppi_reconstruido = base * (1 + p.margem_importador)
-    ppi_via_motor = float(np.average(usar["ppi_brl_t"], weights=kg))
+    # PPI_COST (decisao Level 3 aprovada, ADR 0015/metodologia 1.5): soma
+    # dos componentes SEM margem comercial - `custo_importacao_bottom_up_mensal`
+    # agora expoe `ppi_cost_brl_t` (nao mais `ppi_brl_t`) com essa mesma
+    # semantica. PPI_OFFER (camada analitica, `calcular_ppi_offer`) fica
+    # disponivel aqui so para referencia/comparacao - nunca usado como
+    # `ppi_via_motor` (que reconcilia contra o motor de producao, hoje
+    # Cost-only).
+    ppi_cost_reconstruido = cif_brl_t + ii_brl_t + afrmm_brl_t + ad_brl_t + p.despesas_porto_rs_t + p.frete_interno_rs_t
+    ppi_offer_reconstruido = m.calcular_ppi_offer(ppi_cost_reconstruido, p.margem_importador)
+    ppi_cost_via_motor = float(np.average(usar["ppi_cost_brl_t"], weights=kg))
 
     return dict(
         reference_period=data, fob_usd_t=fob_usd_t, frete_usd_t=frete_usd_t, seguro_usd_t=seguro_usd_t,
@@ -200,7 +207,9 @@ def decompor_mes(grupos: pd.DataFrame, data: pd.Timestamp, p, import_status: str
         aliquota_ii=aliquota_ii_efetiva, aliquota_afrmm=aliquota_afrmm_efetiva,
         antidumping_usd_t=antidumping_usd_t_efetivo, ii_brl_t=ii_brl_t, afrmm_brl_t=afrmm_brl_t,
         ad_brl_t=ad_brl_t, despesas_porto_rs_t=p.despesas_porto_rs_t, frete_interno_rs_t=p.frete_interno_rs_t,
-        margem_rs_t=ppi_reconstruido - base, ppi_reconstruido=ppi_reconstruido, ppi_via_motor=ppi_via_motor,
+        margem_rs_t=ppi_offer_reconstruido - ppi_cost_reconstruido,
+        ppi_cost_reconstruido=ppi_cost_reconstruido, ppi_cost_via_motor=ppi_cost_via_motor,
+        ppi_offer_reconstruido=ppi_offer_reconstruido,
         coverage=coverage, total_kg=total_kg, known_kg=known_kg, n_grupos_usados=len(usar))
 
 
@@ -536,7 +545,7 @@ if __name__ == "__main__":
             decomposicoes[rotulo] = dec
             ppi_vintage = serie.loc[serie["reference_period"] == data, "ppi_rs_t"]
             ppi_vintage_val = float(ppi_vintage.iloc[0]) if not ppi_vintage.empty else float("nan")
-            erro_reconstrucao = abs(dec["ppi_reconstruido"] - ppi_vintage_val)
+            erro_reconstrucao = abs(dec["ppi_cost_reconstruido"] - ppi_vintage_val)
             erro_pct = erro_reconstrucao / ppi_vintage_val * 100 if ppi_vintage_val else float("nan")
             print(f"\n  {rotulo} ({data:%Y-%m}), {dec['n_grupos_usados']} grupo(s) NCM/pais, "
                   f"coverage={dec['coverage']*100:.1f}%:")
@@ -547,8 +556,8 @@ if __name__ == "__main__":
                   f"(aliq={dec['aliquota_afrmm']*100:.2f}%)  AD={dec['ad_brl_t']:,.2f} BRL/t")
             print(f"    porto={dec['despesas_porto_rs_t']:,.2f} BRL/t  frete_interno={dec['frete_interno_rs_t']:,.2f} BRL/t  "
                   f"margem={dec['margem_rs_t']:,.2f} BRL/t")
-            print(f"    PPI reconstruido (componentes)={dec['ppi_reconstruido']:,.4f} BRL/t   "
-                  f"PPI via motor (custo_importacao_bottom_up_mensal)={dec['ppi_via_motor']:,.4f} BRL/t   "
+            print(f"    PPI reconstruido (componentes)={dec['ppi_cost_reconstruido']:,.4f} BRL/t   "
+                  f"PPI via motor (custo_importacao_bottom_up_mensal)={dec['ppi_cost_via_motor']:,.4f} BRL/t   "
                   f"PPI na vintage congelada={ppi_vintage_val:,.4f} BRL/t")
             print(f"    erro reconstrucao vs vintage: {erro_reconstrucao:.6f} BRL/t ({erro_pct:.6f}%) - "
                   f"{'OK' if erro_pct < 0.01 else 'DIVERGENCIA'}")
@@ -565,7 +574,7 @@ if __name__ == "__main__":
         ]
         for rotulo_mes, dec in decomposicoes.items():
             print(f"\n  mes de referencia: {rotulo_mes} ({dec['reference_period']:%Y-%m}), "
-                  f"PPI base={dec['ppi_via_motor']:,.2f} BRL/t")
+                  f"PPI base={dec['ppi_cost_via_motor']:,.2f} BRL/t")
             for nome_choque, kw in choques:
                 cambio_c = dec["cambio_mes"] * kw.get("cambio_mult", 1.0)
                 fob_c = dec["fob_usd_t"] * kw.get("fob_mult", 1.0)
@@ -581,7 +590,7 @@ if __name__ == "__main__":
                 margem_c = p_default.margem_importador + kw.get("margem_add", 0.0)
                 base_c = cif_brl_t_c + ii_c + afrmm_c + ad_c + porto_c + frete_int_c
                 ppi_c = base_c * (1 + margem_c)
-                delta_ppi_pct = (ppi_c / dec["ppi_via_motor"] - 1) * 100
+                delta_ppi_pct = (ppi_c / dec["ppi_cost_via_motor"] - 1) * 100
                 delta_ipia_pct = -delta_ppi_pct  # ipia = domestico/ppi*100, domestico fixo no choque
                 print(f"    {nome_choque:28s}: PPI {delta_ppi_pct:+.2f}%  ->  IPIA {delta_ipia_pct:+.2f}%")
             break  # um mes representativo basta para ilustrar a elasticidade - evita output excessivo

@@ -8,12 +8,14 @@ Deterministic, no network - grupos sinteticos injetados direto. Prova duas
 propriedades que motivaram correcoes reais durante a validacao G3:
 
 1. quando NCMs diferentes tem aliquota de II DIFERENTE dentro do mesmo mes,
-   a soma dos componentes reconstruidos (CIF+II+AFRMM+AD+custos fixos)*
-   (1+margem) precisa bater EXATAMENTE (nao aproximadamente) com o PPI que
-   `custo_importacao_bottom_up_mensal` ja calcula via volume-weighted
-   average do `ppi_brl_t` pronto por grupo - a primeira versao deste
-   helper ponderava a ALIQUOTA (nao o valor monetario) e divergia em
-   ~0.01-0.04% exatamente nesse cenario;
+   a soma dos componentes reconstruidos (CIF+II+AFRMM+AD+custos fixos) -
+   SEM margem desde a metodologia 1.5/ADR 0015, ver docstring de
+   `_ppi_cost_brl_t` - precisa bater EXATAMENTE (nao aproximadamente) com
+   o PPI_COST que `custo_importacao_bottom_up_mensal` ja calcula via
+   volume-weighted average do `ppi_cost_brl_t` pronto por grupo (ate a
+   1.4, esta coluna se chamava `ppi_brl_t` e incluia a margem) - a
+   primeira versao deste helper ponderava a ALIQUOTA (nao o valor
+   monetario) e divergia em ~0.01-0.04% exatamente nesse cenario;
 
 2. elegibilidade (EXPERIMENTAL/PUBLICATION_GRADE/UNKNOWN) e delegada
    INTEIRAMENTE ao `import_status` ja calculado pelo motor de producao
@@ -50,9 +52,11 @@ STATUS_UNKNOWN = "UNKNOWN"
 def _grupos_sinteticos(data, linhas):
     """`linhas`: lista de dicts com fob_usd, frete_usd, seguro_usd, kg,
     cambio_mes, aliquota_ii, aliquota_afrmm, antidumping_usd_t, status -
-    calcula cif_usd_t/cif_brl_t/frete_usd_t/ppi_brl_t exatamente como
+    calcula cif_usd_t/cif_brl_t/frete_usd_t/ppi_cost_brl_t exatamente como
     `custo_importacao_bottom_up_mensal` faria, para nao duplicar logica
-    de producao dentro do fixture de teste."""
+    de producao dentro do fixture de teste. `ppi_cost_brl_t` (metodologia
+    1.5/ADR 0015) e SEM margem comercial - ate a 1.4 esta coluna se
+    chamava `ppi_brl_t` e incluia a margem."""
     p = m.ParamsIPIA()
     linhas_completas = []
     for linha in linhas:
@@ -61,8 +65,8 @@ def _grupos_sinteticos(data, linhas):
         l["frete_usd_t"] = 1000 * l["frete_usd"] / l["kg"]
         l["cif_usd_t"] = 1000 * (l["fob_usd"] + l["frete_usd"] + l["seguro_usd"]) / l["kg"]
         l["cif_brl_t"] = l["cif_usd_t"] * l["cambio_mes"]
-        l["ppi_brl_t"] = m._ppi_brl_t(l["cif_brl_t"], l["aliquota_ii"], l["frete_usd_t"], l["cambio_mes"],
-                                       l["aliquota_afrmm"], l["antidumping_usd_t"], p)
+        l["ppi_cost_brl_t"] = m._ppi_cost_brl_t(l["cif_brl_t"], l["aliquota_ii"], l["frete_usd_t"], l["cambio_mes"],
+                                                 l["aliquota_afrmm"], l["antidumping_usd_t"], p)
         linhas_completas.append(l)
     return pd.DataFrame(linhas_completas)
 
@@ -82,14 +86,24 @@ def test_reconstrucao_exata_com_aliquotas_de_ii_heterogeneas_entre_ncms():
     ])
     dec = decompor_mes(grupos, data, m.ParamsIPIA(), STATUS_PUBLICATION_GRADE)
     assert dec is not None
-    ppi_esperado = float(np.average(grupos["ppi_brl_t"], weights=grupos["kg"]))
-    assert dec["ppi_reconstruido"] == pytest.approx(ppi_esperado, abs=1e-9)
-    assert dec["ppi_via_motor"] == pytest.approx(ppi_esperado, abs=1e-9)
-    # a soma dos componentes tambem precisa bater com o PPI (identidade contabil)
-    soma_componentes = ((dec["cif_brl_t"] + dec["ii_brl_t"] + dec["afrmm_brl_t"] + dec["ad_brl_t"]
+    ppi_cost_esperado = float(np.average(grupos["ppi_cost_brl_t"], weights=grupos["kg"]))
+    assert dec["ppi_cost_reconstruido"] == pytest.approx(ppi_cost_esperado, abs=1e-9)
+    assert dec["ppi_cost_via_motor"] == pytest.approx(ppi_cost_esperado, abs=1e-9)
+    # a soma dos componentes precisa bater EXATAMENTE com o PPI_COST (identidade
+    # contabil) - SEM margem (metodologia 1.5/ADR 0015): ate a 1.4 esta soma
+    # precisava ser multiplicada por (1+margem) para bater com o PPI oficial.
+    soma_componentes = (dec["cif_brl_t"] + dec["ii_brl_t"] + dec["afrmm_brl_t"] + dec["ad_brl_t"]
                         + dec["despesas_porto_rs_t"] + dec["frete_interno_rs_t"])
-                       * (1 + m.ParamsIPIA().margem_importador))
-    assert soma_componentes == pytest.approx(ppi_esperado, abs=1e-9)
+    assert soma_componentes == pytest.approx(ppi_cost_esperado, abs=1e-9)
+
+    # PPI_OFFER (camada analitica) reproduz exatamente o comportamento
+    # PRE-1.5 (PPI_COST * (1 + margem)) - nunca usado para reconstruir o
+    # PPI oficial, mas precisa continuar disponivel para compatibilidade/
+    # cenarios (Sec.6/22 da decisao aprovada).
+    margem = m.ParamsIPIA().margem_importador
+    assert dec["ppi_offer_reconstruido"] == pytest.approx(ppi_cost_esperado * (1 + margem), abs=1e-9)
+    assert m.calcular_ppi_offer(dec["ppi_cost_reconstruido"], margem) == pytest.approx(
+        dec["ppi_offer_reconstruido"], abs=1e-9)
 
 
 def test_import_status_unknown_devolve_none_mesmo_com_grupos_presentes():
@@ -133,8 +147,8 @@ def test_mes_experimental_usa_so_grupos_com_status_de_grupo_conhecido():
     assert dec is not None
     assert dec["n_grupos_usados"] == 1  # so o grupo conhecido (China) entra no ponto estimado
     conhecido = grupos[grupos["status"] == STATUS_EXPERIMENTAL]
-    ppi_esperado = float(np.average(conhecido["ppi_brl_t"], weights=conhecido["kg"]))
-    assert dec["ppi_via_motor"] == pytest.approx(ppi_esperado, abs=1e-9)
+    ppi_cost_esperado = float(np.average(conhecido["ppi_cost_brl_t"], weights=conhecido["kg"]))
+    assert dec["ppi_cost_via_motor"] == pytest.approx(ppi_cost_esperado, abs=1e-9)
 
 
 def test_nao_reimplementa_limiar_de_cobertura_ou_incerteza():
