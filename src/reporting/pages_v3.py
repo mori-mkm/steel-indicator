@@ -35,6 +35,14 @@ _LIMIAR_RUIDO_WATERFALL_PTS = 0.05  # Sec.14: nao rotula visualmente contribuico
 # abaixo disso (agrupadas em "Outros"), mas o dado bruto/audit trail
 # (tabela da Sec.15, CSV de decomposicao) nunca omite nenhum driver.
 
+_GLOSA_SINAL = {
+    # Glosa curta, inline, do rotulo cru de `narr.classificar_sinal_paridade`
+    # - nunca aparece "pelado" na capa (auditoria de clareza pre-apresentacao).
+    "Domestic Premium": "preço doméstico acima da paridade de importação",
+    "Import-Cost Premium": "custo de importação acima do preço doméstico",
+    "At Parity": "preço doméstico e custo de importação equivalentes",
+}
+
 
 def _fmt_pts(valor) -> str:
     return "n/d" if valor is None or (isinstance(valor, float) and np.isnan(valor)) else f"{valor:+.1f} pts"
@@ -62,31 +70,59 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     cor_hero = _COR_PROVISIONAL_HRC if dados["is_provisional_atual"] else t.COR_ACCENT_2
     periodo_txt = _mes_pt(dados["periodo_atual"], abreviado=False)
 
+    # --- COMO LER ESTE RELATORIO (orientacao antes de qualquer numero) ------
+    # Paragrafo compacto (texto_corrido, ja usado no resto da pagina) em vez
+    # de callout_numerado com caixa - a versao em caixa com 3 itens estourou
+    # o rodape no primeiro render (achado de QA visual desta mesma tarefa),
+    # nao ha orcamento vertical na capa para uma caixa cheia aqui.
+    y_como = 0.912
+    c.secao_titulo(fig, MARGEM, y_como, "COMO LER ESTE RELATÓRIO", fontsize=8.5)
+    y_como -= 0.016
+    y_como = c.texto_corrido(
+        fig, MARGEM, y_como, 1 - 2 * MARGEM,
+        "IPIA-HRC é um índice experimental e independente de paridade de custo de importação de "
+        "bobina a quente — não é um relatório de agência de rating nem recomendação de investimento. "
+        "Roteiro: pág. 1 traz o número principal e o que mudou no mês; pág. 2, de onde vem o custo "
+        "de importar; pág. 3, histórico e status de confiabilidade do dado (Publication-grade/"
+        "Experimental/Provisório, detalhados lá); pág. 4, metodologia completa e glossário de "
+        "termos técnicos (PPI_COST, PPI_OFFER e outros).",
+        fontsize=7.4, cor=t.COR_TEXTO_SECUNDARIO)
+
+    # DELTA desloca todo o restante da capa para baixo, na mesma medida do
+    # bloco acima — o espacamento relativo entre hero/KPI/sinal permanece
+    # identico ao original (Sec.5/10), so a ancora de topo muda.
+    y_hero = y_como - 0.02
+    DELTA_CAPA = 0.895 - y_hero
+
     # --- HERO NUMBER (Sec.5) ------------------------------------------------
-    fig.text(MARGEM, 0.895, f"{ipia_atual:.1f}", transform=fig.transFigure, fontsize=56,
+    fig.text(MARGEM, y_hero, f"{ipia_atual:.1f}", transform=fig.transFigure, fontsize=56,
              color=cor_hero, fontfamily=t.FONTE_SERIF, fontweight="bold", va="top")
-    fig.text(MARGEM, 0.825, f"IPIA-HRC  ·  {dados['rotulo_atual']}  ·  {periodo_txt}  ·  paridade = 100",
+    fig.text(MARGEM, 0.825 - DELTA_CAPA,
+             f"IPIA-HRC  ·  {dados['rotulo_atual']}  ·  {periodo_txt}  ·  paridade = 100",
              transform=fig.transFigure, fontsize=9.5, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, va="top")
 
     x_kpi = MARGEM + 0.44
-    c.kpi_tile(fig, x_kpi, 0.895, 0.26, "Δ MOM", _fmt_pts(dados["delta_mom_ipia"]),
+    c.kpi_tile(fig, x_kpi, y_hero, 0.26, "Δ MOM", _fmt_pts(dados["delta_mom_ipia"]),
               cor_valor=t.COR_TEXTO_PRINCIPAL)
-    c.kpi_tile(fig, x_kpi + 0.28, 0.895, 0.26, "Δ YOY", _fmt_pts(dados["delta_yoy_ipia"]),
+    c.kpi_tile(fig, x_kpi + 0.28, y_hero, 0.26, "Δ YOY", _fmt_pts(dados["delta_yoy_ipia"]),
               cor_valor=t.COR_TEXTO_PRINCIPAL)
 
     # --- IMPORT PARITY SIGNAL (Sec.10) --------------------------------------
     sinal = narr.classificar_sinal_paridade(ipia_atual)
-    y_sinal = 0.775
+    y_sinal = 0.775 - DELTA_CAPA
     fig.text(MARGEM, y_sinal, "IMPORT PARITY SIGNAL", transform=fig.transFigure, fontsize=8,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
-    fig.text(MARGEM, y_sinal - 0.020, f"{sinal['categoria']}  ({sinal['distancia_pts']:+.1f} pts vs. 100)",
-             transform=fig.transFigure, fontsize=12, color=cor_hero, fontfamily=t.FONTE_SANS,
-             fontweight="bold", va="top")
+    glosa_sinal = _GLOSA_SINAL.get(sinal["categoria"], "")
+    texto_sinal = (f"{sinal['categoria']} — {glosa_sinal} ({sinal['distancia_pts']:+.1f} pts vs. 100)"
+                  if glosa_sinal else
+                  f"{sinal['categoria']}  ({sinal['distancia_pts']:+.1f} pts vs. 100)")
+    y_sinal_fim = c.texto_corrido(fig, MARGEM, y_sinal - 0.020, 1 - 2 * MARGEM, texto_sinal,
+                                  fontsize=11, cor=cor_hero, bold=True)
 
     # --- HEADLINE + INTERPRETACAO (narrativa determinística) ---------------
     resumo = dados.get("resumo_executivo")
-    y_head = y_sinal - 0.055
+    y_head = y_sinal_fim - 0.020
     if resumo is not None:
         y_after = c.texto_corrido(fig, MARGEM, y_head, 1 - 2 * MARGEM, resumo["interpretation"],
                                   fontsize=10.5, bold=True)
@@ -140,6 +176,33 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
         fig.text(x, y_info - 0.017, str(valor), transform=fig.transFigure, fontsize=8.5,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
+    # --- RISCOS A MONITORAR (resumo do WHAT TO WATCH NEXT da pag.4) ---------
+    y_extra = y_info - 0.05
+    c.secao_titulo(fig, MARGEM, y_extra, "RISCOS A MONITORAR", fontsize=9)
+    y_extra -= 0.017
+    y_extra = c.texto_corrido(
+        fig, MARGEM, y_extra, 1 - 2 * MARGEM,
+        "Cotas/medidas de defesa comercial ainda não resolvidas (ex. GECEX 929/2026) permanecem "
+        "risco metodológico: podem tornar meses futuros UNKNOWN (sem dado publicável naquele mês), "
+        "nunca um resultado direcional presumido. Detalhe completo na Watchlist (pág. 4).",
+        fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
+
+    # --- PRINCIPAIS PREMISSAS (resumo de decisoes ja aceitas nos ADRs) ------
+    y_extra -= 0.015
+    c.secao_titulo(fig, MARGEM, y_extra, "PRINCIPAIS PREMISSAS", fontsize=9)
+    y_extra -= 0.017
+    y_extra = c.texto_corrido(
+        fig, MARGEM, y_extra, 1 - 2 * MARGEM,
+        "Preço doméstico ancorado nas divulgações públicas ponderadas de Usiminas e CSN (ADR 0001). "
+        "PPI_COST exclui margem comercial desde a metodologia 1.5 (ADR 0015). Drivers decompostos "
+        "por Shapley exato, resíduo ≈0 por construção (ADR 0016).",
+        fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
+
+    # --- DISCLAIMER (capa) ---------------------------------------------------
+    fig.text(MARGEM, y_extra - 0.014, "Pesquisa independente — não constitui recomendação de investimento.",
+             transform=fig.transFigure, fontsize=7.2, color=t.COR_TEXTO_SECUNDARIO,
+             fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
+
     c.rodape_pagina(fig,
                     "Fontes: Comex Stat, BCB/SGS, IBGE/SIDRA (PIA-Produto, IPP 242-Siderurgia). "
                     "Decomposição: Shapley exato (ADR 0016). Metodologia completa: docs/METODOLOGIA.md.",
@@ -170,9 +233,11 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
     fig.text(MARGEM, y - 0.028, _fmt_rs(dados["ppi_atual"]), transform=fig.transFigure, fontsize=26,
              color=t.COR_ACCENT_2, fontfamily=t.FONTE_SERIF, fontweight="bold", va="top")
     if dados.get("ppi_offer_atual") is not None:
-        fig.text(MARGEM + 0.45, y, "PPI_OFFER (cenário 3% — analítico)", transform=fig.transFigure,
+        fig.text(MARGEM + 0.45, y, "PPI_OFFER — PPI_COST + margem", transform=fig.transFigure,
                  fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-        fig.text(MARGEM + 0.45, y - 0.022, _fmt_rs(dados["ppi_offer_atual"]), transform=fig.transFigure,
+        fig.text(MARGEM + 0.45, y - 0.013, "comercial de 3% (cenário analítico)", transform=fig.transFigure,
+                 fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+        fig.text(MARGEM + 0.45, y - 0.035, _fmt_rs(dados["ppi_offer_atual"]), transform=fig.transFigure,
                  fontsize=13, color=t.COR_APROXIMADO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
     # --- WATERFALL (Sec.13/14) ------------------------------------------------
@@ -253,6 +318,16 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
 # PAGE 3 - HISTORY & CONFIDENCE
 # =============================================================================
 
+_ROTULOS_STATUS_HUMANOS = {
+    # Mesmos rotulos humanos ja usados na legenda do grafico historico -
+    # so para casar a coluna "Status" desta tabela com o que o leitor ja
+    # viu no grafico (a descricao vem pronta, ja aceita, de `_LEGENDA_STATUS_HRC`).
+    STATUS_PUBLICATION_GRADE_HRC: "Publication-grade",
+    STATUS_EXPERIMENTAL_HRC: "Experimental",
+    "PROVISIONAL": "Provisório",
+}
+
+
 def pagina_history_confidence(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     from .components import cabecalho_pagina_interna, titulo_serif
     cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
@@ -305,8 +380,15 @@ def pagina_history_confidence(fig, dados: dict, data_geracao: dt.datetime, pagin
     ax_hist.tick_params(axis="both", labelsize=7.5, colors=t.COR_TEXTO_SECUNDARIO, length=0)
     ax_hist.set_ylabel("Pontos (100 = paridade)", fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
 
+    # --- SIGNIFICADO DOS STATUS (glosa dos rotulos da legenda acima) --------
+    y_legenda_status = y_top1 - altura1 - 0.02
+    linhas_legenda_status = [[_ROTULOS_STATUS_HUMANOS.get(status, status), desc]
+                             for status, desc in _LEGENDA_STATUS_HRC]
+    c.tabela_simples(fig, (MARGEM, y_legenda_status - 0.075, 1 - 2 * MARGEM, 0.075),
+                     ["Status", "Significado"], linhas_legenda_status, alinhar_direita_a_partir_de=2)
+
     # --- POSICAO HISTORICA (Sec.19) ------------------------------------------
-    y_pos = y_top1 - altura1 - 0.045
+    y_pos = y_legenda_status - 0.075 - 0.03
     c.secao_titulo(fig, MARGEM, y_pos, "POSIÇÃO HISTÓRICA (não é valuation)")
     y_pos -= 0.03
     pos = dados.get("posicao_historica")

@@ -180,7 +180,7 @@ docker run --rm steel-indicator-dev python -m pytest tests/ -v
 docker run --rm steel-indicator-dev python src/indices_setoriais.py --selftest
 ```
 
-334 automated tests (characterization + unit), plus the embedded engine
+529 automated tests (characterization + unit), plus the embedded engine
 self-check. No unit or characterization test makes a live network call or
 writes to `data/processed/`; `tests/integration/` is a planned layer for
 live external-source contract checks and is currently empty.
@@ -212,7 +212,7 @@ A separate legacy report path (`gerar_relatorio_ipia`, cost-decomposition + coun
 ## Methodology governance
 
 - [`docs/METODOLOGIA.md`](docs/METODOLOGIA.md) — official methodology, all products.
-- [`docs/adr/`](docs/adr/) — 15 accepted Architecture Decision Records, including the domestic-price anchor ([0001](docs/adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md)), the PIA-Produto benchmark ([0010](docs/adr/0010-pia-produto-hrc-benchmark-anual-proportional-denton.md)), the official/provisional split ([0011](docs/adr/0011-ipia-hrc-v2-status-provisional-e-series-oficial-provisional.md)), append-only vintages ([0012](docs/adr/0012-ipia-hrc-v2-vintages-append-only.md)), the publication contract ([0013](docs/adr/0013-ipia-hrc-publication-contract.md)), the PPI FX convention ([0014](docs/adr/0014-ppi-fx-convention-media-mensal.md)), and the import parity Cost/Offer scope ([0015](docs/adr/0015-ipia-hrc-import-parity-scope-cost-core-offer-layer.md)).
+- [`docs/adr/`](docs/adr/) — 16 accepted Architecture Decision Records, including the domestic-price anchor ([0001](docs/adr/0001-ancora-preco-domestico-usiminas-csn-ponderado.md)), the PIA-Produto benchmark ([0010](docs/adr/0010-pia-produto-hrc-benchmark-anual-proportional-denton.md)), the official/provisional split ([0011](docs/adr/0011-ipia-hrc-v2-status-provisional-e-series-oficial-provisional.md)), append-only vintages ([0012](docs/adr/0012-ipia-hrc-v2-vintages-append-only.md)), the publication contract ([0013](docs/adr/0013-ipia-hrc-publication-contract.md)), the PPI FX convention ([0014](docs/adr/0014-ppi-fx-convention-media-mensal.md)), the import parity Cost/Offer scope ([0015](docs/adr/0015-ipia-hrc-import-parity-scope-cost-core-offer-layer.md)), and the exact Shapley driver decomposition ([0016](docs/adr/0016-ipia-hrc-driver-decomposition-shapley-method.md)).
 - [`docs/validation/`](docs/validation/) and [`docs/decisions/`](docs/decisions/) — the evidence and readiness analysis behind the V2 publication decision.
 - [`docs/data-sources.md`](docs/data-sources.md) — source-by-source verification status and collection rules.
 - [`docs/architecture.md`](docs/architecture.md) — target software architecture and current migration state.
