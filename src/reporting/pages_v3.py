@@ -220,6 +220,11 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         return
 
     periodo_txt = _mes_pt(dados["periodo_atual"], abreviado=False)
+    # Narrativa mensal (Sec.55) so aparece em meses com arquivo aprovado -
+    # os tres ganhos de espaco abaixo (premissas/waterfall/pos-tabela) so se
+    # aplicam NESSES meses, para abrir espaco real para o paragrafo sem
+    # mudar 1px o layout de todo mes em que a secao nao existe.
+    _tem_narrativa = dados.get("narrativa_mensal") is not None
 
     # --- PPI_COST headline + Offer opcional (Sec.11/12) ---------------------
     y = 0.845
@@ -239,7 +244,7 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
     # usuario antes de mexer: pagina 1 estava densa demais, este bloco tem
     # melhor lugar tematico aqui, ao lado do PPI_COST/decomposicao que ele
     # descreve, no espaco que ja existia antes do Grafico 1).
-    y_premissas = y - 0.095
+    y_premissas = y - (0.078 if _tem_narrativa else 0.095)
     c.secao_titulo(fig, MARGEM, y_premissas, "PRINCIPAIS PREMISSAS", fontsize=9)
     y_premissas -= 0.017
     y_premissas = c.texto_corrido(
@@ -264,7 +269,7 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         else "Gráfico 1: IPIA-HRC — decomposição indisponível"),
         interpretacao=(dados["resumo_executivo"]["what_changed"]["sentenca"]
                       if dados.get("resumo_executivo") else None))
-    altura_wf = 0.15
+    altura_wf = 0.135 if _tem_narrativa else 0.15
     if dados.get("decomposicao_disponivel"):
         linha = dados["decomposicao_ultima_transicao"]
         contribuicoes = {d: float(linha[d]) for d in motor.DRIVERS_PPI_COST}
@@ -300,7 +305,7 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         ]
         c.tabela_simples(fig, (MARGEM, y_tab - 0.10, 1 - 2 * MARGEM, 0.10),
                          ["Driver", "Contribution", "Direction"], linhas_tabela, alinhar_direita_a_partir_de=1)
-        y_tab -= 0.12
+        y_tab -= 0.11 if _tem_narrativa else 0.12
     else:
         y_tab -= 0.02
 
@@ -328,6 +333,25 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         ax_comp.text(0.02, 0.5, "Composição granular indisponível para este período.",
                     transform=ax_comp.transAxes, fontsize=9, color=t.COR_TEXTO_SECUNDARIO,
                     fontfamily=t.FONTE_SANS)
+
+    # --- NARRATIVA DO MÊS (Sec.55 - semi-manual, revisada por humano) -------
+    # `dados["narrativa_mensal"]` so existe quando um arquivo
+    # docs/research/AAAA-MM-narrativa.md foi APROVADO explicitamente
+    # (narrativa_mensal.carregar_narrativa_aprovada, ADR 0017) - rascunho,
+    # ausente ou malformado ja chegam aqui como None, e a pagina segue
+    # identica a antes desta secao existir (nunca fabrica/mostra rascunho).
+    narrativa = dados.get("narrativa_mensal")
+    if narrativa is not None:
+        y_narr = y_top2 - altura_comp - 0.025
+        c.secao_titulo(fig, MARGEM, y_narr, "NARRATIVA DO MÊS", fontsize=9)
+        y_narr -= 0.017
+        y_narr = c.texto_corrido(fig, MARGEM, y_narr, 1 - 2 * MARGEM, narrativa["texto"], fontsize=7.6)
+        y_narr -= 0.007
+        fig.text(MARGEM, y_narr,
+                 f"Revisado por: {narrativa['revisado_por']} em {narrativa['data_revisao']} — "
+                 "contexto qualitativo com revisão humana explícita, não gerado automaticamente.",
+                 transform=fig.transFigure, fontsize=6.6, color=t.COR_TEXTO_SECUNDARIO,
+                 fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
 
     c.rodape_pagina(fig,
                     "PPI_COST não inclui margem comercial desde a metodologia 1.5 (ADR 0015). Decomposição: "

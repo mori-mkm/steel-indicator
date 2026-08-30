@@ -20,6 +20,7 @@ from . import theme as t
 from . import pages
 from . import pages_v3
 from . import narrative
+from . import narrativa_mensal
 
 
 def gerar_relatorio_ipia(caminho_pdf: str, ano_ini: int = 2020, ano_fim: int = 2026,
@@ -265,13 +266,16 @@ def _linha_para_periodo(df: Optional[pd.DataFrame], vintage_id: str, periodo,
 
 
 def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optional[pd.DataFrame] = None,
-                                         componentes_mensais_df: Optional[pd.DataFrame] = None) -> dict:
-    """Funcao PURA (nenhum I/O): estende `preparar_dados_relatorio_ipia_hrc`
-    (V2, reusado sem duplicar) com o que o Reporting V3 precisa: valor
-    MoM/YoY, decomposicao Shapley da ultima transicao (se disponivel),
-    resumo executivo determinístico (`reporting.narrative`), composicao
-    do PPI_COST do mes atual (se disponivel) e posicao historica do IPIA
-    (percentil/mediana/min/max sobre a serie ja publicada).
+                                         componentes_mensais_df: Optional[pd.DataFrame] = None,
+                                         carregador_narrativa=None) -> dict:
+    """Funcao PURA (nenhum I/O novo além do explicitamente injetado):
+    estende `preparar_dados_relatorio_ipia_hrc` (V2, reusado sem
+    duplicar) com o que o Reporting V3 precisa: valor MoM/YoY,
+    decomposicao Shapley da ultima transicao (se disponivel), resumo
+    executivo determinístico (`reporting.narrative`), composicao do
+    PPI_COST do mes atual (se disponivel), posicao historica do IPIA
+    (percentil/mediana/min/max sobre a serie ja publicada) e narrativa
+    mensal semi-manual aprovada (se disponivel).
 
     `decomposicao_df`/`componentes_mensais_df` aceitam o resultado ja
     carregado de `carregar_decomposicao_se_disponivel`/
@@ -279,7 +283,15 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
     padrao do resto do modulo) - None em qualquer um dos dois so
     desativa a secao correspondente (`decomposicao_disponivel=False`/
     `composicao_ppi_disponivel=False`), nunca fabrica dado.
-    """
+
+    `carregador_narrativa` (opcional) e uma FUNCAO `periodo -> Optional[dict]`
+    (tipicamente `narrativa_mensal.carregar_narrativa_aprovada`), injetada em
+    vez de chamada direto daqui - o periodo do mes atual so e conhecido
+    DENTRO desta funcao (derivado da vintage), entao a chamada acontece
+    aqui, mas o QUE chamar fica a criterio do chamador (testes injetam um
+    callable falso, sem tocar o disco; producao injeta o loader real).
+    `None` (padrao) desativa a secao inteira (`dados["narrativa_mensal"] =
+    None`) - nunca le `docs/research/` por conta propria."""
     dados = preparar_dados_relatorio_ipia_hrc(vintage)
 
     combinada = dados["combinada"]
@@ -324,6 +336,9 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
             "distancia_mediana_pts": float(ipia_atual - serie_historica.median()),
         }
 
+    narrativa_mensal = (carregador_narrativa(periodo_atual)
+                       if carregador_narrativa is not None and periodo_atual is not None else None)
+
     dados.update({
         "ipia_atual": float(ipia_atual) if ipia_atual is not None else None,
         "periodo_atual": periodo_atual, "rotulo_atual": rotulo_atual,
@@ -351,6 +366,7 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
         "composicao_ppi_disponivel": linha_componentes is not None,
         "composicao_ppi_mes_atual": linha_componentes,
         "posicao_historica": posicao_historica,
+        "narrativa_mensal": narrativa_mensal,
     })
     return dados
 
@@ -358,6 +374,7 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
 def gerar_relatorio_ipia_hrc_v3(caminho_pdf: str, vintage: dict,
                                 decomposicao_df: Optional[pd.DataFrame] = None,
                                 componentes_mensais_df: Optional[pd.DataFrame] = None,
+                                carregador_narrativa=None,
                                 data_geracao: Optional[dt.datetime] = None) -> dict:
     """Gera o relatorio PDF V3 (4 paginas: Market View, Import Parity &
     Drivers, History & Confidence, Methodology & Watchlist) a partir de
@@ -383,7 +400,8 @@ def gerar_relatorio_ipia_hrc_v3(caminho_pdf: str, vintage: dict,
     from matplotlib.backends.backend_pdf import PdfPages
 
     dados = preparar_dados_relatorio_ipia_hrc_v3(vintage, decomposicao_df=decomposicao_df,
-                                                 componentes_mensais_df=componentes_mensais_df)
+                                                 componentes_mensais_df=componentes_mensais_df,
+                                                 carregador_narrativa=carregador_narrativa)
     data_geracao = data_geracao or dt.datetime.now()
     diretorio = os.path.dirname(caminho_pdf)
     if diretorio:

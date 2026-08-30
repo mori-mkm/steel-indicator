@@ -3867,6 +3867,7 @@ def main():
             gerar_relatorio_ipia_hrc_v3, carregar_decomposicao_se_disponivel,
             carregar_componentes_mensais_se_disponivel,
         )
+        from reporting import narrativa_mensal
         import os
         os.makedirs("data/processed", exist_ok=True)
         caminho = "data/processed/ipia_relatorio.pdf"
@@ -3875,8 +3876,9 @@ def main():
         if decomposicao_df is None:
             print("Aviso: artefato de decomposicao de drivers nao encontrado - relatorio sera gerado "
                   "sem waterfall/narrativa de driver (rode scripts/gerar_ipia_hrc_driver_decomposition.py).")
-        resultado = gerar_relatorio_ipia_hrc_v3(caminho, vintage, decomposicao_df=decomposicao_df,
-                                                componentes_mensais_df=componentes_df)
+        resultado = gerar_relatorio_ipia_hrc_v3(
+            caminho, vintage, decomposicao_df=decomposicao_df, componentes_mensais_df=componentes_df,
+            carregador_narrativa=narrativa_mensal.carregar_narrativa_aprovada)
         print(f"Vintage usada: {resultado['vintage_id']}")
         print(f"Relatorio salvo em {caminho} ({resultado['n_paginas']} paginas)")
         sys.exit(0)

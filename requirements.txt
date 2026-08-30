@@ -18,3 +18,9 @@ pdfplumber==0.11.10
 # Instituto Aco Brasil - pandas.read_excel precisa do xlrd especificamente
 # para esse formato (openpyxl so cobre .xlsx). Ver docs/adr/0007.
 xlrd==2.0.2
+
+# frontmatter YAML dos arquivos de narrativa mensal semi-manual
+# (docs/research/AAAA-MM-narrativa.md) - parsing robusto de
+# narrativa_status/revisado_por/data_revisao em vez de regex sobre texto
+# solto. Ver src/reporting/narrativa_mensal.py e docs/adr/0017.
+PyYAML==6.0.3
