@@ -58,6 +58,12 @@ def _fmt_rs(valor) -> str:
 
 def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     c.banda_topo(fig, "IPIA-HRC — MARKET VIEW")
+    # Autoria na propria capa (nao so no rodape) - na faixa de topo, lado
+    # oposto ao kicker, para nao consumir orcamento vertical do corpo ja
+    # denso da pagina 1.
+    fig.text(1 - MARGEM, 0.965, "Preparado por: Matheus Mori · matheus.kengi@gmail.com",
+             transform=fig.transFigure, fontsize=8, color="white", fontfamily=t.FONTE_SANS,
+             ha="right", va="center")
 
     if dados.get("ipia_atual") is None:
         c.titulo_serif(fig, MARGEM, 0.905, "IPIA-HRC", fontsize=22)
@@ -176,29 +182,18 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
         fig.text(x, y_info - 0.017, str(valor), transform=fig.transFigure, fontsize=8.5,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
-    # --- RISCOS A MONITORAR (resumo do WHAT TO WATCH NEXT da pag.4) ---------
-    y_extra = y_info - 0.05
-    c.secao_titulo(fig, MARGEM, y_extra, "RISCOS A MONITORAR", fontsize=9)
-    y_extra -= 0.017
+    # --- RISCOS + DISCLAIMER (capa) ------------------------------------------
+    # "Principais Premissas" migrou para o topo da pagina 2 (decisao de
+    # reorg da capa, revisada com o usuario antes de mexer). "Riscos a
+    # Monitorar" deixou de ser bloco com titulo proprio - agora e 1 linha so,
+    # colada ao disclaimer, para reduzir a densidade da capa mantendo o aviso
+    # do GECEX visivel na primeira pagina.
+    y_extra = y_info - 0.045
     y_extra = c.texto_corrido(
         fig, MARGEM, y_extra, 1 - 2 * MARGEM,
-        "Cotas/medidas de defesa comercial ainda não resolvidas (ex. GECEX 929/2026) permanecem "
-        "risco metodológico: podem tornar meses futuros UNKNOWN (sem dado publicável naquele mês), "
-        "nunca um resultado direcional presumido. Detalhe completo na Watchlist (pág. 4).",
+        "Riscos: cotas/medidas de defesa comercial não resolvidas (ex. GECEX 929/2026) — ver "
+        "Watchlist, pág. 4.",
         fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
-
-    # --- PRINCIPAIS PREMISSAS (resumo de decisoes ja aceitas nos ADRs) ------
-    y_extra -= 0.015
-    c.secao_titulo(fig, MARGEM, y_extra, "PRINCIPAIS PREMISSAS", fontsize=9)
-    y_extra -= 0.017
-    y_extra = c.texto_corrido(
-        fig, MARGEM, y_extra, 1 - 2 * MARGEM,
-        "Preço doméstico ancorado nas divulgações públicas ponderadas de Usiminas e CSN (ADR 0001). "
-        "PPI_COST exclui margem comercial desde a metodologia 1.5 (ADR 0015). Drivers decompostos "
-        "por Shapley exato, resíduo ≈0 por construção (ADR 0016).",
-        fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
-
-    # --- DISCLAIMER (capa) ---------------------------------------------------
     fig.text(MARGEM, y_extra - 0.014, "Pesquisa independente — não constitui recomendação de investimento.",
              transform=fig.transFigure, fontsize=7.2, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
@@ -240,14 +235,36 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         fig.text(MARGEM + 0.45, y - 0.035, _fmt_rs(dados["ppi_offer_atual"]), transform=fig.transFigure,
                  fontsize=13, color=t.COR_APROXIMADO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
+    # --- PRINCIPAIS PREMISSAS (migrado da capa - reorg revisada com o -------
+    # usuario antes de mexer: pagina 1 estava densa demais, este bloco tem
+    # melhor lugar tematico aqui, ao lado do PPI_COST/decomposicao que ele
+    # descreve, no espaco que ja existia antes do Grafico 1).
+    y_premissas = y - 0.095
+    c.secao_titulo(fig, MARGEM, y_premissas, "PRINCIPAIS PREMISSAS", fontsize=9)
+    y_premissas -= 0.017
+    y_premissas = c.texto_corrido(
+        fig, MARGEM, y_premissas, 1 - 2 * MARGEM,
+        "Preço doméstico ancorado nas divulgações públicas ponderadas de Usiminas e CSN (ADR 0001). "
+        "PPI_COST exclui margem comercial desde a metodologia 1.5 (ADR 0015). Drivers decompostos "
+        "por Shapley exato, resíduo ≈0 por construção (ADR 0016).",
+        fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
+
     # --- WATERFALL (Sec.13/14) ------------------------------------------------
+    # Alturas deste grafico e dos dois blocos seguintes (tabela, composicao)
+    # levemente reduzidas em relacao ao original - a migracao do bloco
+    # Premissas para cima deste grafico (reorg de densidade da capa, revisada
+    # com o usuario) empurrou todo o resto da pagina para baixo; sem esse
+    # ajuste o rodape do Grafico 2 colidia com a citacao de fontes (achado de
+    # QA visual desta mesma tarefa). Rotulos/numeros continuam legiveis nas
+    # novas alturas.
     y_top1 = c.cabecalho_grafico(
-        fig, MARGEM, y - 0.075, 1 - 2 * MARGEM,
-        f"IPIA-HRC — de {_mes_pt(dados['decomposicao_ultima_transicao']['previous_reference_period'])} "
-        f"a {periodo_txt}" if dados.get("decomposicao_disponivel") else "IPIA-HRC — decomposição indisponível",
+        fig, MARGEM, y_premissas - 0.012, 1 - 2 * MARGEM,
+        (f"Gráfico 1: IPIA-HRC — de {_mes_pt(dados['decomposicao_ultima_transicao']['previous_reference_period'])} "
+        f"a {periodo_txt}" if dados.get("decomposicao_disponivel")
+        else "Gráfico 1: IPIA-HRC — decomposição indisponível"),
         interpretacao=(dados["resumo_executivo"]["what_changed"]["sentenca"]
                       if dados.get("resumo_executivo") else None))
-    altura_wf = 0.20
+    altura_wf = 0.15
     if dados.get("decomposicao_disponivel"):
         linha = dados["decomposicao_ultima_transicao"]
         contribuicoes = {d: float(linha[d]) for d in motor.DRIVERS_PPI_COST}
@@ -265,6 +282,10 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
                   fontfamily=t.FONTE_SANS)
 
     # --- DRIVER TABLE, top 5 por |contribuicao| (Sec.15) --------------------
+    # Gap de 0.045 (nao reduzido) - e o respiro para os rotulos do eixo X do
+    # waterfall, que ficam rotacionados 20 graus e estouram para baixo da
+    # area do axes; reduzir esse gap especifico colidia com o titulo da
+    # tabela (achado de QA visual desta mesma tarefa).
     y_tab = y_top1 - altura_wf - 0.045
     c.secao_titulo(fig, MARGEM, y_tab, "TOP 5 DRIVERS DO MÊS")
     y_tab -= 0.025
@@ -277,18 +298,18 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
             "Queda" if narr.direcao_valor_driver(d, v) == "queda" else "Estável"]
             for d, v in ranking
         ]
-        c.tabela_simples(fig, (MARGEM, y_tab - 0.115, 1 - 2 * MARGEM, 0.115),
+        c.tabela_simples(fig, (MARGEM, y_tab - 0.10, 1 - 2 * MARGEM, 0.10),
                          ["Driver", "Contribution", "Direction"], linhas_tabela, alinhar_direita_a_partir_de=1)
-        y_tab -= 0.135
+        y_tab -= 0.12
     else:
         y_tab -= 0.02
 
     # --- IMPORT COST COMPOSITION (Sec.16) -----------------------------------
-    y_comp = y_tab - 0.015
+    y_comp = y_tab - 0.01
     interp_comp = "Onde está o custo de importação — composição do PPI_COST no período mais recente."
     y_top2 = c.cabecalho_grafico(fig, MARGEM, y_comp, 1 - 2 * MARGEM,
-                                 "Composição do PPI_COST", interpretacao=interp_comp)
-    altura_comp = 0.09
+                                 "Gráfico 2: Composição do PPI_COST", interpretacao=interp_comp)
+    altura_comp = 0.075
     if dados.get("composicao_ppi_disponivel"):
         comp = dados["composicao_ppi_mes_atual"]
         componentes = [
@@ -341,7 +362,8 @@ def pagina_history_confidence(fig, dados: dict, data_geracao: dt.datetime, pagin
         return
 
     # --- HISTORICO COMPLETO (Sec.17/18/20) -----------------------------------
-    titulo_hist = ("IPIA-HRC recuou no mês, mas segue "
+    titulo_hist = "Gráfico 3: " + (
+                  "IPIA-HRC recuou no mês, mas segue "
                   + ("acima" if dados["ipia_atual"] > 100 else "abaixo") + " da paridade"
                   if dados.get("delta_mom_ipia") is not None and dados["delta_mom_ipia"] < 0 else
                   "IPIA-HRC avançou no mês" if dados.get("delta_mom_ipia") is not None
@@ -521,6 +543,18 @@ def pagina_methodology_watchlist(fig, dados: dict, data_geracao: dt.datetime, pa
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         fig.text(x, y_cut - 0.017, str(valor), transform=fig.transFigure, fontsize=8, ha="left",
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
+
+    # --- RELATED RESEARCH (pontes para as fontes do proprio projeto) --------
+    # Uma linha so, sem titulo em linha separada - pagina 4 ja tem orcamento
+    # vertical apertado entre DATA CUT e o rodape (achado de QA visual desta
+    # mesma tarefa: a primeira versao com titulo+paragrafo colidiu com o
+    # rodape).
+    y_related = y_cut - 0.017 - 0.024
+    c.texto_corrido(
+        fig, MARGEM, y_related, 1 - 2 * MARGEM,
+        "Related Research — Instituto Aço Brasil (dados setoriais) · docs/METODOLOGIA.md · "
+        "ADRs 0001, 0015, 0016 (âncora doméstica, escopo PPI_COST, decomposição Shapley)",
+        fontsize=7.2, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Metodologia completa: docs/METODOLOGIA.md. Decisões: ADR 0009-0016. "
