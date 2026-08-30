@@ -120,6 +120,78 @@ def carregar_narrativa_aprovada(periodo, base_dir: str = CAMINHO_BASE_PADRAO) ->
             "caminho": caminho}
 
 
+# =============================================================================
+# Scaffold do rascunho (ADR 0018) - roda ANTES da busca humana. Funcao PURA
+# (nenhum I/O) que so monta o texto markdown a partir de dado ja calculado
+# (ranking de drivers Shapley + diagnostico de composicao atipica, ambos ja
+# persistidos por scripts/gerar_ipia_hrc_driver_decomposition.py). O I/O
+# (escrever o arquivo) fica em scripts/gerar_rascunho_narrativa_mensal.py -
+# nunca aqui, mesma separacao de `.claude/rules/python.md`.
+# =============================================================================
+
+_EXPLICACAO_ESTRUTURAL_TEMPLATE = (
+    "Diagnóstico estrutural (ADR 0018) — NÃO é necessário buscar notícia de mercado para "
+    "este driver neste mês. {motivo} Busque apenas se quiser corroborar com um evento real "
+    "conhecido (ex.: uma queda de preço internacional genuína pode coexistir com o efeito "
+    "estrutural acima, sem que um explique o outro)."
+)
+
+
+def gerar_rascunho_narrativa_markdown(periodo, ranking: list, diagnostico: Optional[dict] = None,
+                                      top_n: int = 5) -> str:
+    """Monta o markdown inicial de `docs/research/AAAA-MM-narrativa.md` -
+    SEMPRE `narrativa_status: rascunho` (nunca aprovado - ADR 0017 continua
+    valendo integralmente, isto só reduz busca inútil, nunca decide
+    publicação). `ranking`: lista de `(driver_key, nome_legivel,
+    contribuicao)` já ordenada por |contribuição| (mesma saída de
+    `narrative.ranking_drivers`, com nomes já traduzidos). `diagnostico`
+    (opcional): dict de `indices_setoriais.detectar_composicao_atipica_importacao`
+    para o mês - drivers em `indices_setoriais.DRIVERS_VULNERAVEIS_COMPOSICAO`
+    recebem a explicação estrutural pré-preenchida na subseção "Buscas
+    realizadas" quando `diagnostico["status"] == "atipico"`; os demais
+    mantêm o placeholder de busca de sempre (nenhuma mudança de
+    comportamento para o caso comum)."""
+    import indices_setoriais as motor  # import local: evita import no topo do modulo (mesmo padrao de narrative.py)
+
+    # nome do mes por mapeamento fixo, nunca `%B` (depende de locale do sistema -
+    # mesmo cuidado ja documentado em `indices_setoriais._mes_ano_pt_br`).
+    nome_mes_ano = f"{motor.ACOBRASIL_MESES_PT[periodo.month - 1]}/{periodo.year}"
+    mes_atipico = diagnostico is not None and diagnostico.get("status") == motor.STATUS_COMPOSICAO_ATIPICO
+    linhas_drivers = [f"{i}. {nome} — {contrib:+.2f} pts" for i, (_, nome, contrib) in enumerate(ranking[:top_n], 1)]
+
+    secoes_busca = []
+    for driver_key, nome, _ in ranking[:top_n]:
+        if mes_atipico and driver_key in motor.DRIVERS_VULNERAVEIS_COMPOSICAO:
+            motivo = " ".join(diagnostico.get("motivos", [])) or "Volume do mês abaixo do padrão histórico."
+            secoes_busca.append(f"### Driver: {nome} — diagnóstico estrutural\n\n"
+                                f"{_EXPLICACAO_ESTRUTURAL_TEMPLATE.format(motivo=motivo)}\n")
+        else:
+            secoes_busca.append(f"### Driver: {nome} — achado pendente\n\n"
+                                f"Query: \"\"\n\n"
+                                f"* Fonte: (preencher)\n")
+
+    return (
+        f"---\n"
+        f"narrativa_status: rascunho\n"
+        f"revisado_por: null\n"
+        f"data_revisao: null\n"
+        f"---\n\n"
+        f"# Narrativa — {nome_mes_ano}\n\n"
+        f"## Drivers do mês (Shapley, já calculado)\n\n"
+        + "\n".join(linhas_drivers) + "\n\n"
+        f"## Buscas realizadas\n\n"
+        + "\n".join(secoes_busca) + "\n"
+        f"## Narrativa\n\n"
+        f"(preencher após revisão dos achados acima)\n\n"
+        f"## Checklist de revisão\n\n"
+        f"* [ ] Todo claim tem fonte com data e trecho, ou está marcado como diagnóstico estrutural\n"
+        f"* [ ] Nenhuma causalidade inventada além do que os achados sustentam\n\n"
+        f"## Aprovação\n\n"
+        f"Aprovado por: (pendente)\n"
+        f"Data: (pendente)\n"
+    )
+
+
 # Orçamento medido empiricamente (docs/validation - preview manual desta
 # tarefa) para a seção "Narrativa do mês" da página 2 do Reporting V3
 # (fonte 7.6pt, largura útil da página): ~650 caracteres cabem em ~4

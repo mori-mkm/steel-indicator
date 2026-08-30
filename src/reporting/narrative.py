@@ -46,6 +46,21 @@ def direcao_valor_driver(driver: str, contribuicao: float, tol: float = 1e-9) ->
     return "alta" if subiu else "queda"
 
 
+def drivers_com_marcador_atipico(ranking: Sequence[Tuple[str, float]], diagnostico: Optional[dict]) -> set:
+    """Quais drivers do `ranking` (saida de `ranking_drivers`) devem levar o
+    marcador tipografico de composicao atipica (ADR 0018, Sec.56) - asterisco
+    no nome, NUNCA icone (principio de design ja definido para o relatorio).
+    So marca quando `diagnostico["status"] == motor.STATUS_COMPOSICAO_ATIPICO`
+    E o driver esta em `motor.DRIVERS_VULNERAVEIS_COMPOSICAO` (fob/freight/
+    insurance - vem da mesma agregacao soma/soma sobre as mesmas declaracoes
+    aduaneiras do mes, herdam a mesma vulnerabilidade). `diagnostico=None` ou
+    status diferente de atipico devolve conjunto vazio - nunca marca driver
+    nenhum sem o diagnostico ter rodado e apontado o mes como atipico."""
+    if diagnostico is None or diagnostico.get("status") != motor.STATUS_COMPOSICAO_ATIPICO:
+        return set()
+    return {d for d, _ in ranking if d in motor.DRIVERS_VULNERAVEIS_COMPOSICAO}
+
+
 def ranking_drivers(contribuicoes: Dict[str, float],
                     drivers: Optional[Sequence[str]] = None) -> List[Tuple[str, float]]:
     """Ordena por |contribuição| decrescente (Sec.32 - nunca por

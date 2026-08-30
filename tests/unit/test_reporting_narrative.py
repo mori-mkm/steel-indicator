@@ -215,3 +215,36 @@ def test_what_changed_maximo_tres_drivers_citados():
     citados = {d["driver"] for d in (resumo["main_driver"], resumo["secondary_driver"],
                                       resumo["offsetting_driver"]) if d is not None}
     assert len(citados) <= 3
+
+
+# --- drivers_com_marcador_atipico (ADR 0018) --------------------------------
+
+_RANKING_COM_FOB = [("fob", -3.75), ("domestic_price", 1.55), ("fx", -3.38),
+                    ("ii", -1.18), ("freight", -0.43)]
+
+
+def test_marcador_vazio_quando_diagnostico_ausente():
+    assert n.drivers_com_marcador_atipico(_RANKING_COM_FOB, None) == set()
+
+
+def test_marcador_vazio_quando_status_normal():
+    diagnostico = {"status": "normal"}
+    assert n.drivers_com_marcador_atipico(_RANKING_COM_FOB, diagnostico) == set()
+
+
+def test_marcador_vazio_quando_status_indeterminado():
+    diagnostico = {"status": "indeterminado"}
+    assert n.drivers_com_marcador_atipico(_RANKING_COM_FOB, diagnostico) == set()
+
+
+def test_marcador_so_nos_drivers_vulneraveis_presentes_no_ranking():
+    diagnostico = {"status": "atipico"}
+    marcados = n.drivers_com_marcador_atipico(_RANKING_COM_FOB, diagnostico)
+    # fob e freight estao no ranking e sao vulneraveis; domestic_price/fx/ii nao sao
+    assert marcados == {"fob", "freight"}
+
+
+def test_marcador_nunca_inclui_driver_fora_do_ranking():
+    diagnostico = {"status": "atipico"}
+    ranking_sem_fob = [("domestic_price", 2.0), ("fx", -1.0)]
+    assert n.drivers_com_marcador_atipico(ranking_sem_fob, diagnostico) == set()

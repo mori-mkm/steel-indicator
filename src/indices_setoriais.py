@@ -1073,6 +1073,133 @@ def origem_importacao_bobina_por_pais(ano_ini: int = 2020, ano_fim: int = 2026,
     return out
 
 
+# =============================================================================
+# Diagnostico de composicao atipica na importacao (FOB/frete/seguro) - ver
+# docs/adr/0018-diagnostico-composicao-atipica-importacao.md e
+# docs/METODOLOGIA.md secao 9.7 (unit value bias). Investigacao anterior
+# (jun/2026: FOB blended subiu 3,84% enquanto o FOB chines especifico caiu
+# ~2,8% segundo fontes externas) mostrou que meses de volume anormalmente
+# baixo em relacao a tendencia recente podem ter o unit value dominado por
+# poucos embarques/origens - nao e erro de calculo, mas o numero fica menos
+# representativo de um "preco de mercado" nesse mes.
+#
+# Concentracao de origem foi TESTADA e REJEITADA como gatilho (nao so
+# assumida) - ver evidencia completa na conversa que motivou este modulo:
+# o top-1 pais historicamente ja concentra uma mediana de ~82% do volume
+# (P25=62%), entao um limiar tipo ">60% um pais" dispararia na MAIORIA dos
+# meses normais. O swing MoM de qualquer pais tambem nao discrimina (o mes
+# de jun/2026 ficou no percentil 34 desse swing - nada extremo). O UNICO
+# sinal que se comportou de forma robusta foi volume vs. tendencia recente
+# (jun/2026 no percentil ~10 da razao volume/mediana movel de 12 meses).
+# Por isso o gatilho automatico e SO volume - concentracao de origem
+# continua calculada e devolvida, mas so como contexto explicativo para a
+# narrativa/leitor, nunca como criterio de disparo.
+# =============================================================================
+
+JANELA_TRAILING_MESES_COMPOSICAO = 12
+MIN_MESES_TRAILING_COMPOSICAO = 6  # abaixo disso, baseline insuficiente -> indeterminado, nunca "normal"/"atipico"
+LIMIAR_RAZAO_VOLUME_ATIPICO = 0.35  # ESTIMADO - decisao explicita do usuario (risco assimetrico favorece
+# mais sensibilidade, dado que o revisor humano mantem discricionariedade total mesmo com o diagnostico
+# ativo). Entre o P10 (0,27) e o P15 (0,42) historicos da razao volume/mediana-movel-12m (2020-2026) - a
+# recalibrar quando houver mais historico. Nunca usado para alterar PPI_COST/IPIA/Shapley, so para marcar
+# o driver como estatisticamente menos representativo no relatorio/narrativa.
+
+STATUS_COMPOSICAO_ATIPICO = "atipico"
+STATUS_COMPOSICAO_NORMAL = "normal"
+STATUS_COMPOSICAO_INDETERMINADO = "indeterminado"
+
+DRIVERS_VULNERAVEIS_COMPOSICAO = ("fob", "freight", "insurance")  # todos vem da mesma agregacao
+# soma/soma sobre as mesmas declaracoes aduaneiras do mes (serie_mensal_preco_bobina) - herdam a mesma
+# vulnerabilidade a mix/volume, nao e um problema exclusivo do FOB.
+
+
+def detectar_composicao_atipica_importacao(mes_atual: pd.Timestamp, ano_ini: int = 2020, ano_fim: int = 2026,
+                                           df_bruto: pd.DataFrame | None = None) -> dict:
+    """Diagnostico ANALITICO derivado (nunca altera PPI_COST/IPIA/Shapley -
+    so anota se o unit value FOB/frete/seguro do mes e estatisticamente
+    menos representativo). So usa dado ANTERIOR a `mes_atual` para decidir
+    o status (mesmo espirito de `validar_report_cutoff` - nunca look-ahead).
+
+    Retorna sempre um dict com as chaves:
+      status: STATUS_COMPOSICAO_ATIPICO | _NORMAL | _INDETERMINADO
+      razao_volume, volume_atual_t, mediana_trailing_t, n_meses_trailing, limiar
+      top_pais, top_pais_pct, top_pais_mes_anterior, top_pais_pct_mes_anterior
+        (contexto de origem - SEMPRE calculado quando o mes tem dado, nunca
+        usado para decidir `status`)
+      motivos: list[str] (frases prontas para o rascunho de narrativa;
+        vazia quando status != ATIPICO)
+
+    `status=INDETERMINADO` quando `mes_atual` nao tem dado ou quando ha
+    menos de `MIN_MESES_TRAILING_COMPOSICAO` meses anteriores disponiveis -
+    nunca finge uma baseline que nao existe.
+    """
+    df = df_bruto if df_bruto is not None else _comex_bobina_bruto(ano_ini, ano_fim)
+    vazio = {"status": STATUS_COMPOSICAO_INDETERMINADO, "razao_volume": None, "volume_atual_t": None,
+             "mediana_trailing_t": None, "n_meses_trailing": 0, "limiar": LIMIAR_RAZAO_VOLUME_ATIPICO,
+             "top_pais": None, "top_pais_pct": None, "top_pais_mes_anterior": None,
+             "top_pais_pct_mes_anterior": None, "motivos": []}
+    if df.empty:
+        return vazio
+
+    bobina = serie_mensal_preco_bobina(ano_ini, ano_fim, df_bruto=df)
+    if bobina.empty:
+        return vazio
+    toneladas = bobina.set_index("data")["toneladas"]
+    if mes_atual not in toneladas.index:
+        return vazio
+
+    trailing = toneladas[toneladas.index < mes_atual].tail(JANELA_TRAILING_MESES_COMPOSICAO)
+    volume_atual = float(toneladas.loc[mes_atual])
+
+    # contexto de origem - calculado independente do status (nunca decide o gatilho, so explica)
+    df2 = df.copy()
+    df2["metricKG"] = pd.to_numeric(df2["metricKG"], errors="coerce")
+    df2["data"] = pd.to_datetime(df2["year"].astype(str) + "-" + df2["monthNumber"].astype(str).str.zfill(2) + "-01")
+
+    def _top_pais(data):
+        recorte = df2[df2["data"] == data]
+        if recorte.empty:
+            return None, None
+        por_pais = recorte.groupby("country")["metricKG"].sum()
+        total = por_pais.sum()
+        if total <= 0:
+            return None, None
+        pais = por_pais.idxmax()
+        return pais, float(por_pais.loc[pais] / total * 100.0)
+
+    top_pais, top_pais_pct = _top_pais(mes_atual)
+    top_pais_ant, top_pais_pct_ant = _top_pais(mes_atual - pd.DateOffset(months=1))
+
+    if len(trailing) < MIN_MESES_TRAILING_COMPOSICAO:
+        out = dict(vazio, volume_atual_t=volume_atual, top_pais=top_pais, top_pais_pct=top_pais_pct,
+                  top_pais_mes_anterior=top_pais_ant, top_pais_pct_mes_anterior=top_pais_pct_ant)
+        return out
+
+    mediana_trailing = float(trailing.median())
+    razao = (volume_atual / mediana_trailing) if mediana_trailing > 0 else None
+    status = (STATUS_COMPOSICAO_ATIPICO if razao is not None and razao < LIMIAR_RAZAO_VOLUME_ATIPICO
+             else STATUS_COMPOSICAO_NORMAL)
+
+    motivos = []
+    if status == STATUS_COMPOSICAO_ATIPICO:
+        motivos.append(
+            f"Volume importado do mes ({volume_atual:,.0f} t) e {razao * 100:.0f}% da mediana dos "
+            f"{len(trailing)} meses anteriores ({mediana_trailing:,.0f} t) - abaixo do limiar de "
+            f"{LIMIAR_RAZAO_VOLUME_ATIPICO * 100:.0f}% (ADR 0018). O unit value FOB/frete/seguro deste mes "
+            f"pode estar dominado por poucos embarques, nao refletindo necessariamente movimento real de "
+            f"mercado.")
+        if top_pais:
+            complemento = (f", vs. {top_pais_ant} ({top_pais_pct_ant:.1f}%) no mes anterior"
+                          if top_pais_ant and top_pais_ant != top_pais else "")
+            motivos.append(f"Origem dominante no mes: {top_pais} ({top_pais_pct:.1f}% do volume){complemento}.")
+
+    return {"status": status, "razao_volume": razao, "volume_atual_t": volume_atual,
+           "mediana_trailing_t": mediana_trailing, "n_meses_trailing": len(trailing),
+           "limiar": LIMIAR_RAZAO_VOLUME_ATIPICO, "top_pais": top_pais, "top_pais_pct": top_pais_pct,
+           "top_pais_mes_anterior": top_pais_ant, "top_pais_pct_mes_anterior": top_pais_pct_ant,
+           "motivos": motivos}
+
+
 def calcular_ipia_mensal(ano_ini: int = 2020, ano_fim: int = 2026,
                          df_bruto: pd.DataFrame | None = None) -> pd.DataFrame:
     """Calcula o IPIA mensal completo (V1, legado): custo de importacao real
@@ -3865,7 +3992,7 @@ def main():
         # evita import circular, mesmo padrao ja usado para matplotlib/requests).
         from reporting.report_builder import (
             gerar_relatorio_ipia_hrc_v3, carregar_decomposicao_se_disponivel,
-            carregar_componentes_mensais_se_disponivel,
+            carregar_componentes_mensais_se_disponivel, carregar_diagnostico_importacao_se_disponivel,
         )
         from reporting import narrativa_mensal
         import os
@@ -3873,12 +4000,14 @@ def main():
         caminho = "data/processed/ipia_relatorio.pdf"
         decomposicao_df = carregar_decomposicao_se_disponivel()
         componentes_df = carregar_componentes_mensais_se_disponivel()
+        diagnostico_importacao_df = carregar_diagnostico_importacao_se_disponivel()
         if decomposicao_df is None:
             print("Aviso: artefato de decomposicao de drivers nao encontrado - relatorio sera gerado "
                   "sem waterfall/narrativa de driver (rode scripts/gerar_ipia_hrc_driver_decomposition.py).")
         resultado = gerar_relatorio_ipia_hrc_v3(
             caminho, vintage, decomposicao_df=decomposicao_df, componentes_mensais_df=componentes_df,
-            carregador_narrativa=narrativa_mensal.carregar_narrativa_aprovada)
+            carregador_narrativa=narrativa_mensal.carregar_narrativa_aprovada,
+            diagnostico_importacao_df=diagnostico_importacao_df)
         print(f"Vintage usada: {resultado['vintage_id']}")
         print(f"Relatorio salvo em {caminho} ({resultado['n_paginas']} paginas)")
         sys.exit(0)

@@ -232,6 +232,8 @@ def gerar_relatorio_ipia_hrc(caminho_pdf: str, vintage: dict,
 
 CAMINHO_DECOMPOSICAO_MENSAL_PADRAO = "data/processed/validation/ipia_hrc_driver_decomposition/decomposicao_mensal.csv"
 CAMINHO_COMPONENTES_MENSAIS_PADRAO = "data/processed/validation/ipia_hrc_driver_decomposition/componentes_mensais.csv"
+CAMINHO_DIAGNOSTICO_IMPORTACAO_PADRAO = ("data/processed/validation/ipia_hrc_driver_decomposition/"
+                                         "diagnostico_importacao_mensal.csv")
 
 
 def carregar_decomposicao_se_disponivel(caminho: str = CAMINHO_DECOMPOSICAO_MENSAL_PADRAO) -> Optional[pd.DataFrame]:
@@ -254,6 +256,18 @@ def carregar_componentes_mensais_se_disponivel(
     return pd.read_csv(caminho, parse_dates=["reference_period"])
 
 
+def carregar_diagnostico_importacao_se_disponivel(
+        caminho: str = CAMINHO_DIAGNOSTICO_IMPORTACAO_PADRAO) -> Optional[pd.DataFrame]:
+    """Le o artefato de diagnostico de composicao atipica na importacao
+    (`diagnostico_importacao_mensal.csv`, ADR 0018) ja persistido - NUNCA
+    recalcula `detectar_composicao_atipica_importacao` ao vivo dentro do
+    reporting. Mesma politica de degradacao graciosa de
+    `carregar_decomposicao_se_disponivel`: None se o arquivo nao existir."""
+    if not os.path.exists(caminho):
+        return None
+    return pd.read_csv(caminho, parse_dates=["reference_period"])
+
+
 def _linha_para_periodo(df: Optional[pd.DataFrame], vintage_id: str, periodo,
                         coluna_periodo: str = "reference_period", modo: Optional[str] = "cost") -> Optional[dict]:
     if df is None or df.empty or periodo is None:
@@ -267,7 +281,8 @@ def _linha_para_periodo(df: Optional[pd.DataFrame], vintage_id: str, periodo,
 
 def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optional[pd.DataFrame] = None,
                                          componentes_mensais_df: Optional[pd.DataFrame] = None,
-                                         carregador_narrativa=None) -> dict:
+                                         carregador_narrativa=None,
+                                         diagnostico_importacao_df: Optional[pd.DataFrame] = None) -> dict:
     """Funcao PURA (nenhum I/O novo além do explicitamente injetado):
     estende `preparar_dados_relatorio_ipia_hrc` (V2, reusado sem
     duplicar) com o que o Reporting V3 precisa: valor MoM/YoY,
@@ -291,7 +306,13 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
     aqui, mas o QUE chamar fica a criterio do chamador (testes injetam um
     callable falso, sem tocar o disco; producao injeta o loader real).
     `None` (padrao) desativa a secao inteira (`dados["narrativa_mensal"] =
-    None`) - nunca le `docs/research/` por conta propria."""
+    None`) - nunca le `docs/research/` por conta propria.
+
+    `diagnostico_importacao_df` (opcional) aceita o resultado ja carregado
+    de `carregar_diagnostico_importacao_se_disponivel` (ADR 0018, mesmo
+    padrao de injecao de `decomposicao_df`) - None desativa
+    `dados["diagnostico_importacao_atual"]` (fica None), a pagina 2
+    renderiza identica a antes desta secao existir."""
     dados = preparar_dados_relatorio_ipia_hrc(vintage)
 
     combinada = dados["combinada"]
@@ -325,6 +346,8 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
             decomposicao=linha_decomp, publication_status=status_atual)
 
     linha_componentes = _linha_para_periodo(componentes_mensais_df, dados["vintage_id"], periodo_atual, modo=None)
+    diagnostico_importacao_atual = _linha_para_periodo(
+        diagnostico_importacao_df, dados["vintage_id"], periodo_atual, modo=None)
 
     serie_historica = combinada["ipia_hrc_v2"].dropna()
     posicao_historica = None
@@ -367,6 +390,7 @@ def preparar_dados_relatorio_ipia_hrc_v3(vintage: dict, decomposicao_df: Optiona
         "composicao_ppi_mes_atual": linha_componentes,
         "posicao_historica": posicao_historica,
         "narrativa_mensal": narrativa_mensal,
+        "diagnostico_importacao_atual": diagnostico_importacao_atual,
     })
     return dados
 
@@ -375,6 +399,7 @@ def gerar_relatorio_ipia_hrc_v3(caminho_pdf: str, vintage: dict,
                                 decomposicao_df: Optional[pd.DataFrame] = None,
                                 componentes_mensais_df: Optional[pd.DataFrame] = None,
                                 carregador_narrativa=None,
+                                diagnostico_importacao_df: Optional[pd.DataFrame] = None,
                                 data_geracao: Optional[dt.datetime] = None) -> dict:
     """Gera o relatorio PDF V3 (4 paginas: Market View, Import Parity &
     Drivers, History & Confidence, Methodology & Watchlist) a partir de
@@ -401,7 +426,8 @@ def gerar_relatorio_ipia_hrc_v3(caminho_pdf: str, vintage: dict,
 
     dados = preparar_dados_relatorio_ipia_hrc_v3(vintage, decomposicao_df=decomposicao_df,
                                                  componentes_mensais_df=componentes_mensais_df,
-                                                 carregador_narrativa=carregador_narrativa)
+                                                 carregador_narrativa=carregador_narrativa,
+                                                 diagnostico_importacao_df=diagnostico_importacao_df)
     data_geracao = data_geracao or dt.datetime.now()
     diretorio = os.path.dirname(caminho_pdf)
     if diretorio:

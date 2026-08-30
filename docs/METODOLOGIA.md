@@ -738,6 +738,17 @@ desta etapa (ver §26 e roadmap).
 causa deste gap.** O objetivo aqui é exclusivamente reconhecer e
 documentar a limitação.
 
+**Diagnóstico automático (ADR 0018):** a partir da decomposição de
+drivers do IPIA-HRC (Shapley, ADR 0016), meses em que o volume importado
+cai bem abaixo da tendência
+recente (`< 35%` da mediana dos 12 meses anteriores) são marcados
+automaticamente como composição atípica para FOB/frete/seguro — ver
+`indices_setoriais.detectar_composicao_atipica_importacao` e ADR 0018
+para a evidência completa (inclusive por que concentração de origem foi
+testada e rejeitada como critério de disparo). O diagnóstico aparece na
+página 2 do Reporting V3 (marcador tipográfico, nunca ícone) e no
+processo de narrativa mensal (ADR 0017) — nunca altera PPI_COST/IPIA.
+
 ## 9.8 Classificação de proveniência dos parâmetros do PPI
 
 Auditoria completa dos componentes do PPI (§9.4), com a classificação de

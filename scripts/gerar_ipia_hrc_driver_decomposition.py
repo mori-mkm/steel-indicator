@@ -24,6 +24,9 @@ Produz (gitignored):
         decomposicao_mensal.csv       (transicoes t-1 -> t, contribuicoes Shapley)
         componentes_mensais.csv       (NIVEIS absolutos por mes - composicao do
                                        PPI_COST, consumido por Reporting V3 pag.2)
+        diagnostico_importacao_mensal.csv (composicao atipica FOB/frete/seguro,
+                                       ADR 0018 - consumido por Reporting V3 pag.2
+                                       e pelo scaffold de narrativa mensal)
         resumo_series.csv
         resumo_anual.csv
         threshold_crossings.csv
@@ -133,6 +136,28 @@ def main() -> None:
     caminho_niveis = f"{OUT_DIR}/componentes_mensais.csv"
     componentes_niveis.to_csv(caminho_niveis, index=False)
     print(f"  escrito: {caminho_niveis} ({len(componentes_niveis)} meses)")
+
+    secao("3c. Diagnostico de composicao atipica na importacao (ADR 0018)")
+    linhas_diagnostico = []
+    for data in sorted(componentes_por_mes.keys()):
+        diag = m.detectar_composicao_atipica_importacao(data, ANO_INI, ANO_FIM, df_bruto=df_bruto)
+        linhas_diagnostico.append({
+            "reference_period": data, "vintage_id": vintage_id,
+            "methodology_version": manifest["methodology_version"],
+            "status": diag["status"], "razao_volume": diag["razao_volume"],
+            "volume_atual_t": diag["volume_atual_t"], "mediana_trailing_t": diag["mediana_trailing_t"],
+            "n_meses_trailing": diag["n_meses_trailing"], "limiar": diag["limiar"],
+            "top_pais": diag["top_pais"], "top_pais_pct": diag["top_pais_pct"],
+            "top_pais_mes_anterior": diag["top_pais_mes_anterior"],
+            "top_pais_pct_mes_anterior": diag["top_pais_pct_mes_anterior"],
+            "motivos": " | ".join(diag["motivos"]),
+        })
+    diagnostico_importacao = pd.DataFrame(linhas_diagnostico).sort_values("reference_period").reset_index(drop=True)
+    n_atipicos = (diagnostico_importacao["status"] == m.STATUS_COMPOSICAO_ATIPICO).sum()
+    print(f"  {len(diagnostico_importacao)} meses avaliados, {n_atipicos} marcados '{m.STATUS_COMPOSICAO_ATIPICO}'")
+    caminho_diagnostico = f"{OUT_DIR}/diagnostico_importacao_mensal.csv"
+    diagnostico_importacao.to_csv(caminho_diagnostico, index=False)
+    print(f"  escrito: {caminho_diagnostico}")
 
     secao("4. Decompondo transicoes MES-A-MES (t-1 -> t, so meses CALENDARIO consecutivos)")
     linhas_decomp = []

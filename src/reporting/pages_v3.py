@@ -297,15 +297,33 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
     if dados.get("decomposicao_disponivel"):
         linha = dados["decomposicao_ultima_transicao"]
         ranking = narr.ranking_drivers({d: float(linha[d]) for d in motor.DRIVERS_PPI_COST})[:5]
+        # Marcador tipografico (Sec.56, ADR 0018) - asterisco no nome, NUNCA icone
+        # (principio de design ja definido: relatorio nao tem aparencia de dashboard).
+        # Decisao de QUAIS drivers marcar fica em narrative.drivers_com_marcador_atipico
+        # (funcao pura, testavel sem matplotlib) - aqui so desenha.
+        drivers_marcados = narr.drivers_com_marcador_atipico(ranking, dados.get("diagnostico_importacao_atual"))
+        tem_marcador = bool(drivers_marcados)
         linhas_tabela = [
-            [motor.NOMES_LEGIVEIS_DRIVERS_IPIA_HRC.get(d, d), f"{v:+.2f} pts",
+            [motor.NOMES_LEGIVEIS_DRIVERS_IPIA_HRC.get(d, d) + ("*" if d in drivers_marcados else ""),
+            f"{v:+.2f} pts",
             "Alta" if narr.direcao_valor_driver(d, v) == "alta" else
             "Queda" if narr.direcao_valor_driver(d, v) == "queda" else "Estável"]
             for d, v in ranking
         ]
         c.tabela_simples(fig, (MARGEM, y_tab - 0.10, 1 - 2 * MARGEM, 0.10),
                          ["Driver", "Contribution", "Direction"], linhas_tabela, alinhar_direita_a_partir_de=1)
-        y_tab -= 0.11 if _tem_narrativa else 0.12
+        # Gap pos-tabela menor quando o rodape do marcador tambem vai ser desenhado -
+        # o total (gap + rodape) fica igual ao caso "so narrativa" ja validado por
+        # render (achado de QA visual desta mesma tarefa: sem esse ajuste, narrativa +
+        # marcador juntos - o pior caso, ex. jun/2026 - quase colidiam com o rodape).
+        if tem_marcador:
+            y_tab -= 0.10 if _tem_narrativa else 0.11
+            fig.text(MARGEM, y_tab, "* Volume do mês abaixo do padrão histórico — ver Data Confidence, pág. 3.",
+                     transform=fig.transFigure, fontsize=7, color=t.COR_TEXTO_SECUNDARIO,
+                     fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
+            y_tab -= 0.010
+        else:
+            y_tab -= 0.11 if _tem_narrativa else 0.12
     else:
         y_tab -= 0.02
 
