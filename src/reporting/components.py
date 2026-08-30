@@ -64,17 +64,17 @@ def banda_topo(fig, kicker: str) -> None:
         (0, 0.93), 1, 0.07, transform=fig.transFigure, facecolor=t.COR_BANDA_TOPO,
         edgecolor="none", zorder=0))
     fig.text(t.MARGEM_POL / t.LARGURA_POL, 0.965, kicker, transform=fig.transFigure,
-             fontsize=10, color="white", fontfamily=t.FONTE_SANS,
+             fontsize=t.TAM_KICKER, color="white", fontfamily=t.FONTE_SANS,
              fontweight="bold", va="center")
 
 
-def titulo_serif(fig, x: float, y: float, texto: str, fontsize: float = 26,
+def titulo_serif(fig, x: float, y: float, texto: str, fontsize: float = t.TAM_HERO_SECUNDARIO,
                  cor: str = t.COR_TEXTO_PRINCIPAL, ha: str = "left") -> None:
     fig.text(x, y, texto, transform=fig.transFigure, fontsize=fontsize, color=cor,
              fontfamily=t.FONTE_SERIF, fontweight="bold", ha=ha, va="top")
 
 
-def secao_titulo(fig, x: float, y: float, texto: str, fontsize: float = 12) -> None:
+def secao_titulo(fig, x: float, y: float, texto: str, fontsize: float = t.TAM_TITULO_SECAO) -> None:
     fig.text(x, y, texto, transform=fig.transFigure, fontsize=fontsize,
              color=t.COR_ACCENT_1, fontfamily=t.FONTE_SANS, fontweight="bold",
              ha="left", va="top")
@@ -83,7 +83,7 @@ def secao_titulo(fig, x: float, y: float, texto: str, fontsize: float = 12) -> N
 def cabecalho_pagina_interna(fig, texto: str) -> None:
     """Cabecalho pequeno no topo das paginas internas (2, 3, 4)."""
     fig.text(t.MARGEM_POL / t.LARGURA_POL, 1 - 0.35 / t.ALTURA_POL, texto,
-             transform=fig.transFigure, fontsize=8.5, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_CORPO_SECUNDARIO, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
 
@@ -92,14 +92,14 @@ def rodape_pagina(fig, fontes_texto: str, pagina_num: int, data_geracao) -> None
     largura_util_pt = (1 - 2 * margem_x) * t.LARGURA_POL * 72
     linhas = _quebrar_texto_para_largura(fontes_texto, largura_util_pt, 6.8, t.FONTE_SANS)
     fig.text(margem_x, 0.11, "\n".join(linhas),
-             transform=fig.transFigure, fontsize=6.8, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_FONTE_CITACAO, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, va="top")
     y_barra = 0.045
     fig.text(margem_x, y_barra, "Steel Indicator", transform=fig.transFigure,
-             fontsize=8, color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS,
+             fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS,
              fontweight="bold", va="center")
     fig.text(1 - margem_x, y_barra, f"{data_geracao:%d/%m/%Y}   {pagina_num}",
-             transform=fig.transFigure, fontsize=8, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, ha="right", va="center")
 
 
@@ -125,19 +125,19 @@ def kpi_tile(fig, x: float, y: float, largura: float, rotulo: str, valor_texto: 
     ao rotulo (rotulos longos como "PENETRAÇÃO (PLANOS)" + periodo
     estouravam a largura da coluna e coladvam no proximo KPI - por isso
     fica na linha de baixo, que tem mais espaco)."""
-    fig.text(x, y, rotulo, transform=fig.transFigure, fontsize=8.5,
+    fig.text(x, y, rotulo, transform=fig.transFigure, fontsize=t.TAM_CORPO_SECUNDARIO,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-    fig.text(x, y - 0.022, valor_texto, transform=fig.transFigure, fontsize=17,
+    fig.text(x, y - 0.022, valor_texto, transform=fig.transFigure, fontsize=t.TAM_VALOR_KPI,
              color=cor_valor, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
     y_linha = y - 0.045
     complemento = " · ".join(parte for parte in (nota, periodo) if parte)
     if complemento:
-        fig.text(x, y_linha, complemento, transform=fig.transFigure, fontsize=7.5,
+        fig.text(x, y_linha, complemento, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         y_linha -= 0.015
     if selo:
         cor_selo = t.COR_APROXIMADO if "ESTIMADO" in selo else t.COR_ACCENT_1
-        fig.text(x, y_linha, selo, transform=fig.transFigure, fontsize=7,
+        fig.text(x, y_linha, selo, transform=fig.transFigure, fontsize=t.TAM_SELO,
                  color=cor_selo, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
 
@@ -158,7 +158,7 @@ _PADDING_CAIXA_PT = 10.0
 
 
 def caixa_texto(fig, x: float, y_topo: float, largura: float, texto: str,
-                fontsize: float = 8.7, cor_borda: str = t.COR_ACCENT_1) -> float:
+                fontsize: float = t.TAM_CORPO_DISCLOSURE, cor_borda: str = t.COR_ACCENT_1) -> float:
     """Caixa de destaque de paragrafo unico, com LARGURA de quebra de
     linha calculada a partir da largura real da caixa (nunca estoura a
     borda) e ALTURA calculada a partir do numero de linhas resultante
@@ -182,7 +182,7 @@ def caixa_texto(fig, x: float, y_topo: float, largura: float, texto: str,
 
 
 def texto_corrido(fig, x: float, y_topo: float, largura: float, texto: str,
-                  fontsize: float = 9, cor: str = t.COR_TEXTO_PRINCIPAL, bold: bool = False) -> float:
+                  fontsize: float = t.TAM_CORPO_PADRAO, cor: str = t.COR_TEXTO_PRINCIPAL, bold: bool = False) -> float:
     """Paragrafo solto (sem caixa), quebrado pela largura REAL disponivel -
     para qualquer linha de corpo que possa passar de uma linha (ex.:
     "spread entre X e Y" com numeros variaveis). Uma unica linha de
@@ -197,7 +197,8 @@ def texto_corrido(fig, x: float, y_topo: float, largura: float, texto: str,
 
 
 def callout_numerado(fig, x: float, y_topo: float, largura: float, itens: Sequence[tuple],
-                     titulo_fontsize: float = 9.5, corpo_fontsize: float = 8.5) -> float:
+                     titulo_fontsize: float = t.TAM_SUBTITULO_PAGINA,
+                     corpo_fontsize: float = t.TAM_CORPO_SECUNDARIO) -> float:
     """Caixa de destaque com itens numerados (headline colorido + corpo).
     itens: lista de (headline, corpo). Mesma logica de `caixa_texto`: a
     largura de quebra vem da largura real da caixa, a altura total vem da
@@ -269,14 +270,14 @@ def cabecalho_grafico(fig, x: float, y_topo: float, largura: float, titulo: str,
     legenda: lista de (cor, linestyle, marker, rotulo).
     """
     y = y_topo
-    fig.text(x, y, titulo, transform=fig.transFigure, fontsize=11,
+    fig.text(x, y, titulo, transform=fig.transFigure, fontsize=t.TAM_TITULO_GRAFICO,
              fontfamily=t.FONTE_SERIF, fontweight="bold", color=t.COR_TEXTO_PRINCIPAL, va="top")
     y -= 15.5 / (t.ALTURA_POL * 72)
 
     if interpretacao:
         largura_pt = largura * t.LARGURA_POL * 72
         linhas = _quebrar_texto_para_largura(interpretacao, largura_pt, 8.0, t.FONTE_SANS)
-        fig.text(x, y, "\n".join(linhas), transform=fig.transFigure, fontsize=8.0,
+        fig.text(x, y, "\n".join(linhas), transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO,
                  fontfamily=t.FONTE_SANS, color=t.COR_TEXTO_SECUNDARIO, va="top")
         y -= len(linhas) * _altura_linha_pt(8.0) / (t.ALTURA_POL * 72)
 
@@ -292,7 +293,7 @@ def cabecalho_grafico(fig, x: float, y_topo: float, largura: float, titulo: str,
                                   marker=marker, markersize=4, linewidth=1.4,
                                   transform=fig.transFigure))
             x_cursor = x1 + 6 / (t.LARGURA_POL * 72)
-            fig.text(x_cursor, y, rotulo, transform=fig.transFigure, fontsize=7.5,
+            fig.text(x_cursor, y, rotulo, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                      fontfamily=t.FONTE_SANS, color=t.COR_TEXTO_SECUNDARIO, va="top")
             largura_rotulo_pt = _largura_texto_pt(rotulo, 7.5, t.FONTE_SANS)
             x_cursor += largura_rotulo_pt / (t.LARGURA_POL * 72) + 18 / (t.LARGURA_POL * 72)
@@ -318,7 +319,7 @@ def grafico_linha(ax, x, y, cor: str = t.COR_ACCENT_2,
     ax.set_axisbelow(True)
     ax.tick_params(axis="both", labelsize=7.5, colors=t.COR_TEXTO_SECUNDARIO, length=0)
     if ylabel:
-        ax.set_ylabel(ylabel, fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
+        ax.set_ylabel(ylabel, fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
 
 
 def grafico_barras_empilhadas(ax, rotulo: str, componentes: Sequence[tuple]) -> None:
@@ -334,7 +335,7 @@ def grafico_barras_empilhadas(ax, rotulo: str, componentes: Sequence[tuple]) -> 
         # tabela logo abaixo, nenhum dado escondido)
         if valor / total > 0.04:
             ax.text(esquerda + valor / 2, 0, f"{valor:,.0f}", ha="center", va="center",
-                   fontsize=7, color="white", fontfamily=t.FONTE_SANS, fontweight="bold")
+                   fontsize=t.TAM_SELO, color="white", fontfamily=t.FONTE_SANS, fontweight="bold")
         esquerda += valor
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -347,7 +348,7 @@ def grafico_barras_empilhadas(ax, rotulo: str, componentes: Sequence[tuple]) -> 
 def grafico_barras_horizontais(fig, x: float, y: float, largura: float, altura: float,
                                rotulos: Sequence[str], valores: Sequence[float],
                                cor: str = t.COR_ACCENT_2, formato_valor: str = "{:.1f}%",
-                               fontsize_rotulo: float = 8.5):
+                               fontsize_rotulo: float = t.TAM_CORPO_SECUNDARIO):
     """Barras horizontais com margem esquerda calculada a partir do
     rotulo mais LARGO de verdade nesta chamada (medido via TextPath, nao
     um deslocamento fixo escolhido a dedo) - nunca corta rotulo na borda
@@ -368,7 +369,7 @@ def grafico_barras_horizontais(fig, x: float, y: float, largura: float, altura: 
                        color=t.COR_TEXTO_PRINCIPAL)
     ax.invert_yaxis()
     for i, v in enumerate(valores):
-        ax.text(v, i, f" {formato_valor.format(v)}", va="center", fontsize=8,
+        ax.text(v, i, f" {formato_valor.format(v)}", va="center", fontsize=t.TAM_CORPO_PEQUENO,
                color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
     for spine in ("top", "right", "bottom"):
         ax.spines[spine].set_visible(False)
@@ -410,7 +411,7 @@ def grafico_waterfall(ax, rotulo_inicio: str, valor_inicio: float,
                           -abs(valor_fim - valor_inicio) * 0.03)
         va = "bottom" if valor >= 0 else "top"
         ax.text(x[i], y_rotulo, formato_valor.format(valor), ha="center", va=va,
-               fontsize=7.5, color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
+               fontsize=t.TAM_ROTULO_AUXILIAR, color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
         # linha conectora fina entre o topo desta barra e a proxima
         ax.plot([x[i] + 0.3, x[i] + 1 - 0.3], [topo, topo], color=t.COR_LINHA_GRADE,
                linewidth=0.8, zorder=1)
@@ -418,15 +419,15 @@ def grafico_waterfall(ax, rotulo_inicio: str, valor_inicio: float,
 
     ax.bar(x[0], valor_inicio, color=cor_extremo, width=0.6, zorder=3)
     ax.text(x[0], valor_inicio, formato_valor.format(valor_inicio).replace("+", ""),
-           ha="center", va="bottom", fontsize=8, fontweight="bold",
+           ha="center", va="bottom", fontsize=t.TAM_CORPO_PEQUENO, fontweight="bold",
            color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
     ax.bar(x[-1], valor_fim, color=cor_extremo, width=0.6, zorder=3)
     ax.text(x[-1], valor_fim, formato_valor.format(valor_fim).replace("+", ""),
-           ha="center", va="bottom", fontsize=8, fontweight="bold",
+           ha="center", va="bottom", fontsize=t.TAM_CORPO_PEQUENO, fontweight="bold",
            color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(rotulos, fontsize=7.5, fontfamily=t.FONTE_SANS,
+    ax.set_xticklabels(rotulos, fontsize=t.TAM_ROTULO_AUXILIAR, fontfamily=t.FONTE_SANS,
                        color=t.COR_TEXTO_SECUNDARIO, rotation=20, ha="right")
     for spine in ("top", "right", "left"):
         ax.spines[spine].set_visible(False)
@@ -460,7 +461,7 @@ def tabela_simples(fig, rect: tuple, colunas: Sequence[str], linhas: Sequence[Se
     for c, nome in enumerate(colunas):
         ha = "left" if c < alinhar_direita_a_partir_de else "right"
         x = c * largura_col + (0.01 if ha == "left" else largura_col - 0.01)
-        ax.text(x, 1 - altura_linha / 2, nome, transform=ax.transAxes, fontsize=8,
+        ax.text(x, 1 - altura_linha / 2, nome, transform=ax.transAxes, fontsize=t.TAM_CORPO_PEQUENO,
                fontweight="bold", color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS,
                ha=ha, va="center")
     for r, linha in enumerate(linhas):
@@ -471,5 +472,5 @@ def tabela_simples(fig, rect: tuple, colunas: Sequence[str], linhas: Sequence[Se
         for c, valor in enumerate(linha):
             ha = "left" if c < alinhar_direita_a_partir_de else "right"
             x = c * largura_col + (0.01 if ha == "left" else largura_col - 0.01)
-            ax.text(x, y_centro, str(valor), transform=ax.transAxes, fontsize=8,
+            ax.text(x, y_centro, str(valor), transform=ax.transAxes, fontsize=t.TAM_CORPO_PEQUENO,
                    color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, ha=ha, va="center")

@@ -62,13 +62,13 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     # oposto ao kicker, para nao consumir orcamento vertical do corpo ja
     # denso da pagina 1.
     fig.text(1 - MARGEM, 0.965, "Preparado por: Matheus Mori · matheus.kengi@gmail.com",
-             transform=fig.transFigure, fontsize=8, color="white", fontfamily=t.FONTE_SANS,
+             transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO, color="white", fontfamily=t.FONTE_SANS,
              ha="right", va="center")
 
     if dados.get("ipia_atual") is None:
-        c.titulo_serif(fig, MARGEM, 0.905, "IPIA-HRC", fontsize=22)
+        c.titulo_serif(fig, MARGEM, 0.905, "IPIA-HRC", fontsize=t.TAM_TITULO_CAPA_V3)
         fig.text(MARGEM, 0.85, "Sem dado publicado nesta vintage.", transform=fig.transFigure,
-                 fontsize=10, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+                 fontsize=t.TAM_KICKER, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         c.rodape_pagina(fig, "Sem fontes aplicáveis — sem dado.", pagina_num=pagina_num, data_geracao=data_geracao)
         return
 
@@ -82,7 +82,7 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     # o rodape no primeiro render (achado de QA visual desta mesma tarefa),
     # nao ha orcamento vertical na capa para uma caixa cheia aqui.
     y_como = 0.912
-    c.secao_titulo(fig, MARGEM, y_como, "COMO LER ESTE RELATÓRIO", fontsize=8.5)
+    c.secao_titulo(fig, MARGEM, y_como, "COMO LER ESTE RELATÓRIO", fontsize=t.TAM_CORPO_SECUNDARIO)
     y_como -= 0.016
     y_como = c.texto_corrido(
         fig, MARGEM, y_como, 1 - 2 * MARGEM,
@@ -92,7 +92,7 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
         "de importar; pág. 3, histórico e status de confiabilidade do dado (Publication-grade/"
         "Experimental/Provisório, detalhados lá); pág. 4, metodologia completa e glossário de "
         "termos técnicos (PPI_COST, PPI_OFFER e outros).",
-        fontsize=7.4, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_CORPO_MINIMO, cor=t.COR_TEXTO_SECUNDARIO)
 
     # DELTA desloca todo o restante da capa para baixo, na mesma medida do
     # bloco acima — o espacamento relativo entre hero/KPI/sinal permanece
@@ -101,11 +101,11 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     DELTA_CAPA = 0.895 - y_hero
 
     # --- HERO NUMBER (Sec.5) ------------------------------------------------
-    fig.text(MARGEM, y_hero, f"{ipia_atual:.1f}", transform=fig.transFigure, fontsize=56,
+    fig.text(MARGEM, y_hero, f"{ipia_atual:.1f}", transform=fig.transFigure, fontsize=t.TAM_HERO_NUMERO,
              color=cor_hero, fontfamily=t.FONTE_SERIF, fontweight="bold", va="top")
     fig.text(MARGEM, 0.825 - DELTA_CAPA,
              f"IPIA-HRC  ·  {dados['rotulo_atual']}  ·  {periodo_txt}  ·  paridade = 100",
-             transform=fig.transFigure, fontsize=9.5, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_SUBTITULO_PAGINA, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, va="top")
 
     x_kpi = MARGEM + 0.44
@@ -117,32 +117,32 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     # --- IMPORT PARITY SIGNAL (Sec.10) --------------------------------------
     sinal = narr.classificar_sinal_paridade(ipia_atual)
     y_sinal = 0.775 - DELTA_CAPA
-    fig.text(MARGEM, y_sinal, "IMPORT PARITY SIGNAL", transform=fig.transFigure, fontsize=8,
+    fig.text(MARGEM, y_sinal, "IMPORT PARITY SIGNAL", transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
     glosa_sinal = _GLOSA_SINAL.get(sinal["categoria"], "")
     texto_sinal = (f"{sinal['categoria']} — {glosa_sinal} ({sinal['distancia_pts']:+.1f} pts vs. 100)"
                   if glosa_sinal else
                   f"{sinal['categoria']}  ({sinal['distancia_pts']:+.1f} pts vs. 100)")
     y_sinal_fim = c.texto_corrido(fig, MARGEM, y_sinal - 0.020, 1 - 2 * MARGEM, texto_sinal,
-                                  fontsize=11, cor=cor_hero, bold=True)
+                                  fontsize=t.TAM_TITULO_GRAFICO, cor=cor_hero, bold=True)
 
     # --- HEADLINE + INTERPRETACAO (narrativa determinística) ---------------
     resumo = dados.get("resumo_executivo")
     y_head = y_sinal_fim - 0.020
     if resumo is not None:
         y_after = c.texto_corrido(fig, MARGEM, y_head, 1 - 2 * MARGEM, resumo["interpretation"],
-                                  fontsize=10.5, bold=True)
+                                  fontsize=t.TAM_DECK_CAPA, bold=True)
         y_after -= 0.012
         y_after = c.texto_corrido(fig, MARGEM, y_after, 1 - 2 * MARGEM, resumo["parity_interpretation"],
-                                  fontsize=9, cor=t.COR_TEXTO_SECUNDARIO)
+                                  fontsize=t.TAM_CORPO_PADRAO, cor=t.COR_TEXTO_SECUNDARIO)
     else:
         y_after = c.texto_corrido(fig, MARGEM, y_head, 1 - 2 * MARGEM,
-                                  narr.montar_interpretacao_100(ipia_atual), fontsize=10.5, bold=True)
+                                  narr.montar_interpretacao_100(ipia_atual), fontsize=t.TAM_DECK_CAPA, bold=True)
         y_after = c.texto_corrido(
             fig, MARGEM, y_after - 0.012, 1 - 2 * MARGEM,
             "Decomposição de drivers indisponível para esta vintage (mês anterior sem transição "
             "calculável ou artefato de decomposição não gerado) — ver página 4.",
-            fontsize=8.5, cor=t.COR_TEXTO_SECUNDARIO)
+            fontsize=t.TAM_CORPO_SECUNDARIO, cor=t.COR_TEXTO_SECUNDARIO)
 
     # --- WHAT CHANGED (Sec.9) -----------------------------------------------
     y_wc = y_after - 0.035
@@ -165,7 +165,7 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     else:
         y_after_callout = c.texto_corrido(fig, MARGEM, y_wc, 1 - 2 * MARGEM,
                                           "Sem decomposição disponível para o mês atual.",
-                                          fontsize=9, cor=t.COR_TEXTO_SECUNDARIO)
+                                          fontsize=t.TAM_CORPO_PADRAO, cor=t.COR_TEXTO_SECUNDARIO)
 
     # --- REPORT INFO strip ---------------------------------------------------
     y_info = y_after_callout - 0.03
@@ -177,9 +177,9 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
     largura_bloco = (1 - 2 * MARGEM) / len(info)
     for i, (rotulo, valor) in enumerate(info):
         x = MARGEM + i * largura_bloco
-        fig.text(x, y_info, rotulo, transform=fig.transFigure, fontsize=7.5,
+        fig.text(x, y_info, rotulo, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-        fig.text(x, y_info - 0.017, str(valor), transform=fig.transFigure, fontsize=8.5,
+        fig.text(x, y_info - 0.017, str(valor), transform=fig.transFigure, fontsize=t.TAM_CORPO_SECUNDARIO,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
     # --- RISCOS + DISCLAIMER (capa) ------------------------------------------
@@ -193,9 +193,9 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
         fig, MARGEM, y_extra, 1 - 2 * MARGEM,
         "Riscos: cotas/medidas de defesa comercial não resolvidas (ex. GECEX 929/2026) — ver "
         "Watchlist, pág. 4.",
-        fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_CORPO_COMPACTO, cor=t.COR_TEXTO_SECUNDARIO)
     fig.text(MARGEM, y_extra - 0.014, "Pesquisa independente — não constitui recomendação de investimento.",
-             transform=fig.transFigure, fontsize=7.2, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_NOTA_FONTE_SECUNDARIA, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
 
     c.rodape_pagina(fig,
@@ -211,11 +211,11 @@ def pagina_market_view(fig, dados: dict, data_geracao: dt.datetime, pagina_num: 
 def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     from .components import cabecalho_pagina_interna, titulo_serif
     cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
-    titulo_serif(fig, MARGEM, 0.90, "Paridade de Importação & Drivers", fontsize=19)
+    titulo_serif(fig, MARGEM, 0.90, "Paridade de Importação & Drivers", fontsize=t.TAM_TITULO_PAGINA)
 
     if dados.get("ppi_atual") is None:
         fig.text(MARGEM, 0.85, "Sem dado publicado nesta vintage.", transform=fig.transFigure,
-                 fontsize=10, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+                 fontsize=t.TAM_KICKER, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         c.rodape_pagina(fig, "Sem fontes aplicáveis — sem dado.", pagina_num=pagina_num, data_geracao=data_geracao)
         return
 
@@ -228,31 +228,31 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
 
     # --- PPI_COST headline + Offer opcional (Sec.11/12) ---------------------
     y = 0.845
-    fig.text(MARGEM, y, f"PPI_COST — {periodo_txt}", transform=fig.transFigure, fontsize=9,
+    fig.text(MARGEM, y, f"PPI_COST — {periodo_txt}", transform=fig.transFigure, fontsize=t.TAM_CORPO_PADRAO,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
-    fig.text(MARGEM, y - 0.028, _fmt_rs(dados["ppi_atual"]), transform=fig.transFigure, fontsize=26,
+    fig.text(MARGEM, y - 0.028, _fmt_rs(dados["ppi_atual"]), transform=fig.transFigure, fontsize=t.TAM_HERO_SECUNDARIO,
              color=t.COR_ACCENT_2, fontfamily=t.FONTE_SERIF, fontweight="bold", va="top")
     if dados.get("ppi_offer_atual") is not None:
         fig.text(MARGEM + 0.45, y, "PPI_OFFER — PPI_COST + margem", transform=fig.transFigure,
-                 fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+                 fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         fig.text(MARGEM + 0.45, y - 0.013, "comercial de 3% (cenário analítico)", transform=fig.transFigure,
-                 fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+                 fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         fig.text(MARGEM + 0.45, y - 0.035, _fmt_rs(dados["ppi_offer_atual"]), transform=fig.transFigure,
-                 fontsize=13, color=t.COR_APROXIMADO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
+                 fontsize=t.TAM_VALOR_SECUNDARIO, color=t.COR_APROXIMADO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
     # --- PRINCIPAIS PREMISSAS (migrado da capa - reorg revisada com o -------
     # usuario antes de mexer: pagina 1 estava densa demais, este bloco tem
     # melhor lugar tematico aqui, ao lado do PPI_COST/decomposicao que ele
     # descreve, no espaco que ja existia antes do Grafico 1).
     y_premissas = y - (0.078 if _tem_narrativa else 0.095)
-    c.secao_titulo(fig, MARGEM, y_premissas, "PRINCIPAIS PREMISSAS", fontsize=9)
+    c.secao_titulo(fig, MARGEM, y_premissas, "PRINCIPAIS PREMISSAS", fontsize=t.TAM_CORPO_PADRAO)
     y_premissas -= 0.017
     y_premissas = c.texto_corrido(
         fig, MARGEM, y_premissas, 1 - 2 * MARGEM,
         "Preço doméstico ancorado nas divulgações públicas ponderadas de Usiminas e CSN (ADR 0001). "
         "PPI_COST exclui margem comercial desde a metodologia 1.5 (ADR 0015). Drivers decompostos "
         "por Shapley exato, resíduo ≈0 por construção (ADR 0016).",
-        fontsize=7.6, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_CORPO_COMPACTO, cor=t.COR_TEXTO_SECUNDARIO)
 
     # --- WATERFALL (Sec.13/14) ------------------------------------------------
     # Alturas deste grafico e dos dois blocos seguintes (tabela, composicao)
@@ -283,7 +283,7 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         ax_wf = fig.add_axes((MARGEM, y_top1 - altura_wf, 1 - 2 * MARGEM, altura_wf))
         ax_wf.axis("off")
         ax_wf.text(0.02, 0.5, "Decomposição de drivers indisponível para este período.",
-                  transform=ax_wf.transAxes, fontsize=9, color=t.COR_TEXTO_SECUNDARIO,
+                  transform=ax_wf.transAxes, fontsize=t.TAM_CORPO_PADRAO, color=t.COR_TEXTO_SECUNDARIO,
                   fontfamily=t.FONTE_SANS)
 
     # --- DRIVER TABLE, top 5 por |contribuicao| (Sec.15) --------------------
@@ -319,7 +319,7 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         if tem_marcador:
             y_tab -= 0.10 if _tem_narrativa else 0.11
             fig.text(MARGEM, y_tab, "* Volume do mês abaixo do padrão histórico — ver Data Confidence, pág. 3.",
-                     transform=fig.transFigure, fontsize=7, color=t.COR_TEXTO_SECUNDARIO,
+                     transform=fig.transFigure, fontsize=t.TAM_SELO, color=t.COR_TEXTO_SECUNDARIO,
                      fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
             y_tab -= 0.010
         else:
@@ -337,11 +337,11 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         comp = dados["composicao_ppi_mes_atual"]
         componentes = [
             ("CIF (FOB+frete+seguro)", comp["cif_brl_t"], t.PALETA_CATEGORICA[0]),
-            ("II", comp["ii_brl_t"], "#6B4226"),
-            ("AFRMM", comp["afrmm_brl_t"], "#8C6E4A"),
+            ("II", comp["ii_brl_t"], t.COR_II),
+            ("AFRMM", comp["afrmm_brl_t"], t.COR_AFRMM),
             ("Antidumping", comp["antidumping_brl_t"], t.COR_NEGATIVO),
-            ("Desp. portuárias", comp["d_porto_rs_t"], "#7F8C8D"),
-            ("Frete interno", comp["d_interno_rs_t"], "#95A5A6"),
+            ("Desp. portuárias", comp["d_porto_rs_t"], t.COR_DESPESAS_PORTO),
+            ("Frete interno", comp["d_interno_rs_t"], t.COR_FRETE_INTERNO),
         ]
         ax_comp = fig.add_axes((MARGEM, y_top2 - altura_comp, 1 - 2 * MARGEM, altura_comp))
         c.grafico_barras_empilhadas(ax_comp, "PPI_COST", componentes)
@@ -349,7 +349,7 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
         ax_comp = fig.add_axes((MARGEM, y_top2 - altura_comp, 1 - 2 * MARGEM, altura_comp))
         ax_comp.axis("off")
         ax_comp.text(0.02, 0.5, "Composição granular indisponível para este período.",
-                    transform=ax_comp.transAxes, fontsize=9, color=t.COR_TEXTO_SECUNDARIO,
+                    transform=ax_comp.transAxes, fontsize=t.TAM_CORPO_PADRAO, color=t.COR_TEXTO_SECUNDARIO,
                     fontfamily=t.FONTE_SANS)
 
     # --- NARRATIVA DO MÊS (Sec.55 - semi-manual, revisada por humano) -------
@@ -361,14 +361,14 @@ def pagina_import_parity_drivers(fig, dados: dict, data_geracao: dt.datetime, pa
     narrativa = dados.get("narrativa_mensal")
     if narrativa is not None:
         y_narr = y_top2 - altura_comp - 0.025
-        c.secao_titulo(fig, MARGEM, y_narr, "NARRATIVA DO MÊS", fontsize=9)
+        c.secao_titulo(fig, MARGEM, y_narr, "NARRATIVA DO MÊS", fontsize=t.TAM_CORPO_PADRAO)
         y_narr -= 0.017
-        y_narr = c.texto_corrido(fig, MARGEM, y_narr, 1 - 2 * MARGEM, narrativa["texto"], fontsize=7.6)
+        y_narr = c.texto_corrido(fig, MARGEM, y_narr, 1 - 2 * MARGEM, narrativa["texto"], fontsize=t.TAM_CORPO_COMPACTO)
         y_narr -= 0.007
         fig.text(MARGEM, y_narr,
                  f"Revisado por: {narrativa['revisado_por']} em {narrativa['data_revisao']} — "
                  "contexto qualitativo com revisão humana explícita, não gerado automaticamente.",
-                 transform=fig.transFigure, fontsize=6.6, color=t.COR_TEXTO_SECUNDARIO,
+                 transform=fig.transFigure, fontsize=t.TAM_CITACAO_REVISOR, color=t.COR_TEXTO_SECUNDARIO,
                  fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
 
     c.rodape_pagina(fig,
@@ -394,12 +394,12 @@ _ROTULOS_STATUS_HUMANOS = {
 def pagina_history_confidence(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     from .components import cabecalho_pagina_interna, titulo_serif
     cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
-    titulo_serif(fig, MARGEM, 0.90, "Histórico & Confiança", fontsize=19)
+    titulo_serif(fig, MARGEM, 0.90, "Histórico & Confiança", fontsize=t.TAM_TITULO_PAGINA)
 
     combinada = dados["combinada"]
     if combinada.empty:
         fig.text(MARGEM, 0.85, "Sem dado publicado nesta vintage.", transform=fig.transFigure,
-                 fontsize=10, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
+                 fontsize=t.TAM_KICKER, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
         c.rodape_pagina(fig, "Sem fontes aplicáveis — sem dado.", pagina_num=pagina_num, data_geracao=data_geracao)
         return
 
@@ -442,7 +442,7 @@ def pagina_history_confidence(fig, dados: dict, data_geracao: dt.datetime, pagin
     ax_hist.grid(axis="y", color=t.COR_LINHA_GRADE, linewidth=0.7)
     ax_hist.set_axisbelow(True)
     ax_hist.tick_params(axis="both", labelsize=7.5, colors=t.COR_TEXTO_SECUNDARIO, length=0)
-    ax_hist.set_ylabel("Pontos (100 = paridade)", fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
+    ax_hist.set_ylabel("Pontos (100 = paridade)", fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
 
     # --- SIGNIFICADO DOS STATUS (glosa dos rotulos da legenda acima) --------
     y_legenda_status = y_top1 - altura1 - 0.02
@@ -469,19 +469,19 @@ def pagina_history_confidence(fig, dados: dict, data_geracao: dt.datetime, pagin
     resumo = dados.get("resumo_executivo")
     texto_confianca = (resumo["confidence_sentence"] if resumo is not None
                       else narr.montar_confidence_sentence(dados["status_atual"]))
-    y_pos = c.texto_corrido(fig, MARGEM, y_pos, 1 - 2 * MARGEM, texto_confianca, fontsize=8.7)
+    y_pos = c.texto_corrido(fig, MARGEM, y_pos, 1 - 2 * MARGEM, texto_confianca, fontsize=t.TAM_CORPO_DISCLOSURE)
     y_pos -= 0.018
     y_pos = c.texto_corrido(fig, MARGEM, y_pos, 1 - 2 * MARGEM, _DISCLOSURE_PROXY_DOMESTICO,
-                            fontsize=8.2, cor=t.COR_TEXTO_SECUNDARIO)
+                            fontsize=t.TAM_NOTA_METODOLOGICA, cor=t.COR_TEXTO_SECUNDARIO)
     y_pos -= 0.018
     y_pos = c.texto_corrido(fig, MARGEM, y_pos, 1 - 2 * MARGEM, _DISCLOSURE_BAIXA_LIQUIDEZ,
-                            fontsize=8.2, cor=t.COR_TEXTO_SECUNDARIO)
+                            fontsize=t.TAM_NOTA_METODOLOGICA, cor=t.COR_TEXTO_SECUNDARIO)
     y_pos -= 0.018
     y_pos = c.texto_corrido(
         fig, MARGEM, y_pos, 1 - 2 * MARGEM,
         "O FOB é um valor unitário derivado do comércio realizado, não um price assessment de agência; "
         "mudanças de composição do mix importado podem afetar o valor — ver docs/METODOLOGIA.md §9.7.",
-        fontsize=8.2, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_NOTA_METODOLOGICA, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Séries completas: ipia_hrc_v2_official.csv / ipia_hrc_v2_provisional.csv. "
@@ -508,7 +508,7 @@ _WATCHLIST_DRIVERS = ["fob", "fx", "freight", "domestic_price"]
 def pagina_methodology_watchlist(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     from .components import cabecalho_pagina_interna, titulo_serif
     cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
-    titulo_serif(fig, MARGEM, 0.90, "Metodologia & Watchlist", fontsize=19)
+    titulo_serif(fig, MARGEM, 0.90, "Metodologia & Watchlist", fontsize=t.TAM_TITULO_PAGINA)
 
     # --- METODOLOGIA EM 30 SEGUNDOS (Sec.24/25/26) ---------------------------
     c.secao_titulo(fig, MARGEM, 0.855, "METODOLOGIA EM 30 SEGUNDOS")
@@ -516,14 +516,14 @@ def pagina_methodology_watchlist(fig, dados: dict, data_geracao: dt.datetime, pa
     for linha_diagrama in ("Comex Stat  →  PPI_COST",
                           "PIA-HRC + IPP-242  →  Preço doméstico",
                           "Preço doméstico / PPI_COST × 100  →  IPIA-HRC"):
-        fig.text(MARGEM, y, linha_diagrama, transform=fig.transFigure, fontsize=9.5,
+        fig.text(MARGEM, y, linha_diagrama, transform=fig.transFigure, fontsize=t.TAM_SUBTITULO_PAGINA,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
         y -= 0.020
     y -= 0.008
     y = c.texto_corrido(
         fig, MARGEM, y, 1 - 2 * MARGEM,
         "PPI_COST = FOB + frete + seguro + câmbio + tarifas (II/AFRMM/antidumping) + custos "
-        "portuários + logística interna.", fontsize=8.5, cor=t.COR_TEXTO_SECUNDARIO)
+        "portuários + logística interna.", fontsize=t.TAM_CORPO_SECUNDARIO, cor=t.COR_TEXTO_SECUNDARIO)
     y -= 0.028
     y_after_bullets = c.callout_numerado(fig, MARGEM, y, 1 - 2 * MARGEM, [
         ("PIA = nível anual", "Receita/volume de HRC no mercado interno, benchmark do IBGE."),
@@ -563,7 +563,7 @@ def pagina_methodology_watchlist(fig, dados: dict, data_geracao: dt.datetime, pa
         "Direção reflete apenas o mês mais recente decomposto — não é previsão. Cotas/medidas de "
         "defesa comercial ainda não resolvidas (ex. GECEX 929/2026) permanecem risco metodológico: "
         "podem tornar meses futuros UNKNOWN, nunca um resultado direcional presumido.",
-        fontsize=8.2, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_NOTA_METODOLOGICA, cor=t.COR_TEXTO_SECUNDARIO)
 
     # --- DATA CUT (Sec.30) ----------------------------------------------------
     # y fixo, mas com folga generosa acima do rodape (que pode ocupar 2
@@ -581,9 +581,9 @@ def pagina_methodology_watchlist(fig, dados: dict, data_geracao: dt.datetime, pa
     largura_bloco = (1 - 2 * MARGEM) / len(info)
     for i, (rotulo, valor) in enumerate(info):
         x = MARGEM + i * largura_bloco
-        fig.text(x, y_cut, rotulo, transform=fig.transFigure, fontsize=7.5,
+        fig.text(x, y_cut, rotulo, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-        fig.text(x, y_cut - 0.017, str(valor), transform=fig.transFigure, fontsize=8, ha="left",
+        fig.text(x, y_cut - 0.017, str(valor), transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO, ha="left",
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
     # --- RELATED RESEARCH (pontes para as fontes do proprio projeto) --------
@@ -596,7 +596,7 @@ def pagina_methodology_watchlist(fig, dados: dict, data_geracao: dt.datetime, pa
         fig, MARGEM, y_related, 1 - 2 * MARGEM,
         "Related Research — Instituto Aço Brasil (dados setoriais) · docs/METODOLOGIA.md · "
         "ADRs 0001, 0015, 0016 (âncora doméstica, escopo PPI_COST, decomposição Shapley)",
-        fontsize=7.2, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_NOTA_FONTE_SECUNDARIA, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Metodologia completa: docs/METODOLOGIA.md. Decisões: ADR 0009-0016. "

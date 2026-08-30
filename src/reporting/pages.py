@@ -98,9 +98,9 @@ def _gerar_bullets_executivos(df_ipia: pd.DataFrame) -> list:
 
 def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
     c.banda_topo(fig, "IPIA — RELATÓRIO MENSAL")
-    c.titulo_serif(fig, MARGEM, 0.905, "IPIA", fontsize=34)
+    c.titulo_serif(fig, MARGEM, 0.905, "IPIA", fontsize=t.TAM_TITULO_CAPA)
     fig.text(MARGEM, 0.865, "Índice de Paridade de Importação do Aço — Bobina Laminada a Quente",
-             transform=fig.transFigure, fontsize=12, color=t.COR_TEXTO_PRINCIPAL,
+             transform=fig.transFigure, fontsize=t.TAM_TITULO_SECAO, color=t.COR_TEXTO_PRINCIPAL,
              fontfamily=t.FONTE_SERIF, va="top")
 
     ultimo = df_ipia.iloc[-1]
@@ -108,7 +108,7 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
     tendencia = "alta" if delta_total > 0 else "queda" if delta_total < 0 else "estabilidade"
     deck = (f"Paridade em {ultimo['ipia']:.0f} pontos — {tendencia} de "
            f"{abs(delta_total):.1f} pts em {len(df_ipia)} meses (série completa abaixo)")
-    fig.text(MARGEM, 0.838, deck, transform=fig.transFigure, fontsize=10.5,
+    fig.text(MARGEM, 0.838, deck, transform=fig.transFigure, fontsize=t.TAM_DECK_CAPA,
              color=t.COR_ACCENT_2, fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
 
     # box "o que o IPIA mede" - linguagem simples, sem duplicar METODOLOGIA.md.
@@ -126,7 +126,7 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
     # eixos/grade completos) - nao e so decorativo, tem numero real.
     janela = df_ipia.tail(12)
     fig.text(MARGEM, y_apos_box - 0.018, "IPIA — ÚLTIMOS 12 MESES", transform=fig.transFigure,
-             fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
+             fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
              fontweight="bold", va="top")
     altura_spark = 0.075
     topo_spark = y_apos_box - 0.038
@@ -141,7 +141,7 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
                      f"(fechou em {janela['ipia'].iloc[-1]:.0f}).")
     y_legenda_spark = topo_spark - altura_spark - 0.016
     fig.text(MARGEM, y_legenda_spark, legenda_spark, transform=fig.transFigure,
-             fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
+             fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
              fontstyle="italic", va="top")
 
     # KPIs - cada um com periodo (mes real desse numero especifico, nunca
@@ -183,7 +183,7 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
         "IPIA e preço doméstico usam uma âncora que é proxy do segmento \"Siderurgia\" de "
         "Usiminas/CSN (selo CALCULADO · PROXY acima), não específica de bobina a quente — "
         "detalhe completo na decomposição de custo, página 2.",
-        fontsize=8, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_CORPO_PEQUENO, cor=t.COR_TEXTO_SECUNDARIO)
 
     y_secao = y_disclosure - 0.025
     c.secao_titulo(fig, MARGEM, y_secao, "O QUE MUDOU")
@@ -201,14 +201,14 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
         ("Última atualização", f"{data_geracao:%d/%m/%Y %H:%M}"),
     ]
     y = y_apos_callout - 0.028
-    fig.text(MARGEM, y + 0.018, "REPORT INFORMATION", transform=fig.transFigure, fontsize=8,
+    fig.text(MARGEM, y + 0.018, "REPORT INFORMATION", transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
     largura_bloco = (1 - 2 * MARGEM) / len(info)
     for i, (rotulo, valor) in enumerate(info):
         x = MARGEM + i * largura_bloco
-        fig.text(x, y - 0.004, rotulo, transform=fig.transFigure, fontsize=7.5,
+        fig.text(x, y - 0.004, rotulo, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-        fig.text(x, y - 0.020, valor, transform=fig.transFigure, fontsize=9,
+        fig.text(x, y - 0.020, valor, transform=fig.transFigure, fontsize=t.TAM_CORPO_PADRAO,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
     c.rodape_pagina(fig,
@@ -221,7 +221,7 @@ def pagina_capa(fig, df_ipia: pd.DataFrame, data_geracao: dt.datetime) -> None:
 def pagina_decomposicao_custo(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame,
                               data_geracao: dt.datetime, pagina_num: int) -> None:
     c.cabecalho_pagina_interna(fig, "IPIA — Relatório Mensal")
-    c.titulo_serif(fig, MARGEM, 0.90, "Decomposição do Custo de Importação", fontsize=19)
+    c.titulo_serif(fig, MARGEM, 0.90, "Decomposição do Custo de Importação", fontsize=t.TAM_TITULO_PAGINA)
     ultimo = df_custo.iloc[-1]
     ultimo_ipia = df_ipia.iloc[-1]
     # bug real corrigido (ver docs/adr/0008): esta pagina usava
@@ -244,11 +244,11 @@ def pagina_decomposicao_custo(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame
         ("FOB (China)", fob_brl_t, t.COR_ACCENT_2),
         ("Frete internacional", frete_brl_t, t.PALETA_CATEGORICA[0]),
         ("Seguro", seguro_brl_t, t.PALETA_CATEGORICA[2]),
-        ("Imposto de Importação", ultimo["ii_brl_t"], "#6B4226"),
-        ("AFRMM", ultimo["afrmm_brl_t"], "#8C6E4A"),
+        ("Imposto de Importação", ultimo["ii_brl_t"], t.COR_II),
+        ("AFRMM", ultimo["afrmm_brl_t"], t.COR_AFRMM),
         ("Antidumping", ultimo["antidumping_brl_t"], t.COR_NEGATIVO),
-        ("Despesas de porto", ultimo["despesas_porto_rs_t"], "#7F8C8D"),
-        ("Frete interno", ultimo["frete_interno_rs_t"], "#95A5A6"),
+        ("Despesas de porto", ultimo["despesas_porto_rs_t"], t.COR_DESPESAS_PORTO),
+        ("Frete interno", ultimo["frete_interno_rs_t"], t.COR_FRETE_INTERNO),
         ("Margem do importador", ultimo["margem_rs_t"], t.COR_ACCENT_1),
     ]
     total = sum(v for _, v, _ in componentes)
@@ -336,9 +336,9 @@ def pagina_series_temporais(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame,
     numa pagina so deixava a pagina densa demais (3 graficos de linha +
     KPIs + barras + rodape espremidos num unico A4)."""
     c.cabecalho_pagina_interna(fig, "IPIA — Relatório Mensal")
-    c.titulo_serif(fig, MARGEM, 0.90, "Séries Temporais", fontsize=19)
+    c.titulo_serif(fig, MARGEM, 0.90, "Séries Temporais", fontsize=t.TAM_TITULO_PAGINA)
     fig.text(MARGEM, 0.868, "Evolução mensal do IPIA, da penetração de importação e do câmbio.",
-             transform=fig.transFigure, fontsize=9.5, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_SUBTITULO_PAGINA, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, va="top")
 
     ultimo = df_ipia.iloc[-1]
@@ -422,11 +422,11 @@ def pagina_series_temporais(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame,
         ax_pen.grid(axis="y", color=t.COR_LINHA_GRADE, linewidth=0.7)
         ax_pen.set_axisbelow(True)
         ax_pen.tick_params(labelsize=7.5, colors=t.COR_TEXTO_SECUNDARIO, length=0)
-        ax_pen.set_ylabel("%", fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
+        ax_pen.set_ylabel("%", fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
     else:
         ax_pen.axis("off")
         ax_pen.text(0.02, 0.5, "Penetração de importação: sem dado disponível na série atual.",
-                   transform=ax_pen.transAxes, fontsize=9, color=t.COR_TEXTO_SECUNDARIO,
+                   transform=ax_pen.transAxes, fontsize=t.TAM_CORPO_PADRAO, color=t.COR_TEXTO_SECUNDARIO,
                    fontfamily=t.FONTE_SANS)
 
     # Cambio - o primeiro mes do historico pode ficar NaN (ffill sem valor
@@ -463,10 +463,10 @@ def pagina_indicadores_origem(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame
     unica de dashboard) e uma tabela de recapitulacao dos ultimos meses.
     """
     c.cabecalho_pagina_interna(fig, "IPIA — Relatório Mensal")
-    c.titulo_serif(fig, MARGEM, 0.90, "Indicadores e Origem das Importações", fontsize=19)
+    c.titulo_serif(fig, MARGEM, 0.90, "Indicadores e Origem das Importações", fontsize=t.TAM_TITULO_PAGINA)
     fig.text(MARGEM, 0.868, "De onde vem o aço importado e como os principais indicadores "
              "evoluíram nos últimos meses.",
-             transform=fig.transFigure, fontsize=9.5, color=t.COR_TEXTO_SECUNDARIO,
+             transform=fig.transFigure, fontsize=t.TAM_SUBTITULO_PAGINA, color=t.COR_TEXTO_SECUNDARIO,
              fontfamily=t.FONTE_SANS, va="top")
 
     if df_origem is not None and len(df_origem):
@@ -518,7 +518,7 @@ def pagina_indicadores_origem(fig, df_ipia: pd.DataFrame, df_custo: pd.DataFrame
     if v_penet_pag4 is not None and v_penet_pag4.metodo_motivo:
         c.texto_corrido(fig, MARGEM, y_tabela_bottom - 0.025, 1 - 2 * MARGEM,
                         f"Nota sobre a coluna Penetração: {v_penet_pag4.metodo_motivo}",
-                        fontsize=7.5, cor=t.COR_TEXTO_SECUNDARIO)
+                        fontsize=t.TAM_ROTULO_AUXILIAR, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Fontes: Comex Stat (importação, origem), BCB/SGS (câmbio), releases "
@@ -672,16 +672,16 @@ def _gerar_bullets_executivos_ipia_hrc(dados: dict) -> list:
 
 def pagina_capa_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime) -> None:
     c.banda_topo(fig, "IPIA-HRC — RELATÓRIO")
-    c.titulo_serif(fig, MARGEM, 0.905, "IPIA-HRC", fontsize=34)
+    c.titulo_serif(fig, MARGEM, 0.905, "IPIA-HRC", fontsize=t.TAM_TITULO_CAPA)
     fig.text(MARGEM, 0.865, "Índice de Paridade de Importação do Aço — Bobina Laminada a Quente",
-             transform=fig.transFigure, fontsize=12, color=t.COR_TEXTO_PRINCIPAL,
+             transform=fig.transFigure, fontsize=t.TAM_TITULO_SECAO, color=t.COR_TEXTO_PRINCIPAL,
              fontfamily=t.FONTE_SERIF, va="top")
 
     combinada = dados["combinada"]
     rotulo_corrente, periodo_corrente, valor_corrente, e_provisorio = _valor_corrente_ipia_hrc(dados)
     cor_corrente = _COR_PROVISIONAL_HRC if e_provisorio else t.COR_ACCENT_2
     deck = f"{rotulo_corrente} — {periodo_corrente}: {valor_corrente:.2f} pontos (paridade = 100)"
-    fig.text(MARGEM, 0.838, deck, transform=fig.transFigure, fontsize=10.5,
+    fig.text(MARGEM, 0.838, deck, transform=fig.transFigure, fontsize=t.TAM_DECK_CAPA,
              color=cor_corrente, fontfamily=t.FONTE_SANS, fontstyle="italic", va="top")
 
     y_apos_box = c.caixa_texto(
@@ -695,7 +695,7 @@ def pagina_capa_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime) -> None:
     # nao substitui a distincao completa de status da pagina 3.
     janela = combinada.tail(12)
     fig.text(MARGEM, y_apos_box - 0.018, "IPIA-HRC — ÚLTIMOS 12 MESES", transform=fig.transFigure,
-             fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
+             fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
              fontweight="bold", va="top")
     altura_spark = 0.075
     topo_spark = y_apos_box - 0.038
@@ -717,7 +717,7 @@ def pagina_capa_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime) -> None:
         legenda_spark = "Sem dado publicado suficiente para os últimos 12 meses."
     y_legenda_spark = topo_spark - altura_spark - 0.016
     fig.text(MARGEM, y_legenda_spark, legenda_spark, transform=fig.transFigure,
-             fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
+             fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS,
              fontstyle="italic", va="top")
 
     # KPIs: valor corrente, status do ultimo ponto, cobertura OFFICIAL
@@ -743,7 +743,7 @@ def pagina_capa_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime) -> None:
         fig, MARGEM, y_kpi - 0.085, 1 - 2 * MARGEM,
         "Preço doméstico baseado em PIA-Produto (IBGE) + IPP 242-Siderurgia — proxy declarado, "
         "não específico de bobina a quente. Detalhe completo na página 4.",
-        fontsize=8, cor=t.COR_TEXTO_SECUNDARIO)
+        fontsize=t.TAM_CORPO_PEQUENO, cor=t.COR_TEXTO_SECUNDARIO)
 
     y_secao = y_disclosure - 0.025
     c.secao_titulo(fig, MARGEM, y_secao, "O QUE MUDOU")
@@ -758,14 +758,14 @@ def pagina_capa_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime) -> None:
         ("Vintage publicada", dados["vintage_id"]),
     ]
     y = y_apos_callout - 0.028
-    fig.text(MARGEM, y + 0.018, "REPORT INFORMATION", transform=fig.transFigure, fontsize=8,
+    fig.text(MARGEM, y + 0.018, "REPORT INFORMATION", transform=fig.transFigure, fontsize=t.TAM_CORPO_PEQUENO,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
     largura_bloco = (1 - 2 * MARGEM) / len(info)
     for i, (rotulo, valor) in enumerate(info):
         x = MARGEM + i * largura_bloco
-        fig.text(x, y - 0.004, rotulo, transform=fig.transFigure, fontsize=7.5,
+        fig.text(x, y - 0.004, rotulo, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-        fig.text(x, y - 0.020, valor, transform=fig.transFigure, fontsize=8.5,
+        fig.text(x, y - 0.020, valor, transform=fig.transFigure, fontsize=t.TAM_CORPO_SECUNDARIO,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
 
     c.rodape_pagina(fig,
@@ -776,13 +776,13 @@ def pagina_capa_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime) -> None:
 
 def pagina_paridade_importacao_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     c.cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
-    c.titulo_serif(fig, MARGEM, 0.90, "Paridade de Importação", fontsize=19)
+    c.titulo_serif(fig, MARGEM, 0.90, "Paridade de Importação", fontsize=t.TAM_TITULO_PAGINA)
 
     combinada = dados["combinada"]
     ultimo = combinada.iloc[-1] if not combinada.empty else None
     if ultimo is None:
         fig.text(MARGEM, 0.85, "Sem dado publicado nesta vintage.", transform=fig.transFigure,
-                 fontsize=10, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
+                 fontsize=t.TAM_KICKER, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
         c.rodape_pagina(fig, "Sem fontes aplicáveis - sem dado.", pagina_num=pagina_num, data_geracao=data_geracao)
         return
 
@@ -850,9 +850,9 @@ def pagina_paridade_importacao_ipia_hrc(fig, dados: dict, data_geracao: dt.datet
 
 def pagina_dinamica_historica_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     c.cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
-    c.titulo_serif(fig, MARGEM, 0.90, "Dinâmica Histórica", fontsize=19)
+    c.titulo_serif(fig, MARGEM, 0.90, "Dinâmica Histórica", fontsize=t.TAM_TITULO_PAGINA)
     fig.text(MARGEM, 0.868, "Evolução do IPIA-HRC por status de publicação e dos componentes "
-             "doméstico/importação.", transform=fig.transFigure, fontsize=9.5,
+             "doméstico/importação.", transform=fig.transFigure, fontsize=t.TAM_SUBTITULO_PAGINA,
              color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
 
     combinada = dados["combinada"]
@@ -891,11 +891,11 @@ def pagina_dinamica_historica_ipia_hrc(fig, dados: dict, data_geracao: dt.dateti
         ax_hist.grid(axis="y", color=t.COR_LINHA_GRADE, linewidth=0.7)
         ax_hist.set_axisbelow(True)
         ax_hist.tick_params(axis="both", labelsize=7.5, colors=t.COR_TEXTO_SECUNDARIO, length=0)
-        ax_hist.set_ylabel("Pontos (100 = paridade)", fontsize=8, color=t.COR_TEXTO_SECUNDARIO,
+        ax_hist.set_ylabel("Pontos (100 = paridade)", fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO,
                            fontfamily=t.FONTE_SANS)
     else:
         ax_hist.axis("off")
-        ax_hist.text(0.02, 0.5, "Sem dado publicado.", transform=ax_hist.transAxes, fontsize=9,
+        ax_hist.text(0.02, 0.5, "Sem dado publicado.", transform=ax_hist.transAxes, fontsize=t.TAM_CORPO_PADRAO,
                     color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
 
     interp_dp = "Preço doméstico (PIA-based) vs. custo de paridade de importação, mesmas datas do gráfico acima."
@@ -918,7 +918,7 @@ def pagina_dinamica_historica_ipia_hrc(fig, dados: dict, data_geracao: dt.dateti
         ax_dp.grid(axis="y", color=t.COR_LINHA_GRADE, linewidth=0.7)
         ax_dp.set_axisbelow(True)
         ax_dp.tick_params(axis="both", labelsize=7.5, colors=t.COR_TEXTO_SECUNDARIO, length=0)
-        ax_dp.set_ylabel("R$/t", fontsize=8, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
+        ax_dp.set_ylabel("R$/t", fontsize=t.TAM_CORPO_PEQUENO, color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS)
     else:
         ax_dp.axis("off")
 
@@ -937,7 +937,7 @@ def pagina_dinamica_historica_ipia_hrc(fig, dados: dict, data_geracao: dt.dateti
                          f"{_mes_pt(grupo.iloc[-1]['reference_period'])})")
         c.texto_corrido(fig, MARGEM, y_comentario, 1 - 2 * MARGEM,
                         "Nível típico por status de publicação — " + "; ".join(partes) + ".",
-                        fontsize=8.5, cor=t.COR_TEXTO_SECUNDARIO)
+                        fontsize=t.TAM_CORPO_SECUNDARIO, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Fontes: IBGE/SIDRA (PIA-Produto, IPP 242-Siderurgia), Comex Stat, BCB/SGS — "
@@ -947,7 +947,7 @@ def pagina_dinamica_historica_ipia_hrc(fig, dados: dict, data_geracao: dt.dateti
 
 def pagina_mercado_metodologia_ipia_hrc(fig, dados: dict, data_geracao: dt.datetime, pagina_num: int) -> None:
     c.cabecalho_pagina_interna(fig, "IPIA-HRC — Relatório")
-    c.titulo_serif(fig, MARGEM, 0.90, "Metodologia, Qualidade e Publicação", fontsize=19)
+    c.titulo_serif(fig, MARGEM, 0.90, "Metodologia, Qualidade e Publicação", fontsize=t.TAM_TITULO_PAGINA)
 
     y = 0.855
     c.secao_titulo(fig, MARGEM, y, "STATUS DE PUBLICAÇÃO")
@@ -961,12 +961,12 @@ def pagina_mercado_metodologia_ipia_hrc(fig, dados: dict, data_geracao: dt.datet
 
     c.secao_titulo(fig, MARGEM, y, "PROXY DO PREÇO DOMÉSTICO")
     y -= 0.025
-    y = c.texto_corrido(fig, MARGEM, y, 1 - 2 * MARGEM, _DISCLOSURE_PROXY_DOMESTICO, fontsize=8.7)
+    y = c.texto_corrido(fig, MARGEM, y, 1 - 2 * MARGEM, _DISCLOSURE_PROXY_DOMESTICO, fontsize=t.TAM_CORPO_DISCLOSURE)
     y -= 0.025
 
     c.secao_titulo(fig, MARGEM, y, "BAIXA LIQUIDEZ")
     y -= 0.025
-    y = c.texto_corrido(fig, MARGEM, y, 1 - 2 * MARGEM, _DISCLOSURE_BAIXA_LIQUIDEZ, fontsize=8.7)
+    y = c.texto_corrido(fig, MARGEM, y, 1 - 2 * MARGEM, _DISCLOSURE_BAIXA_LIQUIDEZ, fontsize=t.TAM_CORPO_DISCLOSURE)
     y -= 0.025
 
     c.secao_titulo(fig, MARGEM, y, "BENCHMARK CORPORATIVO — VALIDAÇÃO")
@@ -976,7 +976,7 @@ def pagina_mercado_metodologia_ipia_hrc(fig, dados: dict, data_geracao: dt.datet
         "Uma âncora corporativa independente (Usiminas + CSN, \"IPIA-HRC Corporate Benchmark\") é "
         "usada apenas como validação externa do preço doméstico — nunca para calibrar a série "
         "PIA-based, nunca apresentada como o preço doméstico oficial. Comparação documentada em "
-        "docs/validation/ipia_hrc_v2_final_validation.md.", fontsize=8.7)
+        "docs/validation/ipia_hrc_v2_final_validation.md.", fontsize=t.TAM_CORPO_DISCLOSURE)
     y -= 0.025
 
     c.secao_titulo(fig, MARGEM, y, "VINTAGE E REVISÃO")
@@ -992,16 +992,16 @@ def pagina_mercado_metodologia_ipia_hrc(fig, dados: dict, data_geracao: dt.datet
     largura_bloco = (1 - 2 * MARGEM) / len(info_vintage)
     for i, (rotulo, valor) in enumerate(info_vintage):
         x = MARGEM + i * largura_bloco
-        fig.text(x, y_caixa_topo, rotulo, transform=fig.transFigure, fontsize=7.5,
+        fig.text(x, y_caixa_topo, rotulo, transform=fig.transFigure, fontsize=t.TAM_ROTULO_AUXILIAR,
                  color=t.COR_TEXTO_SECUNDARIO, fontfamily=t.FONTE_SANS, va="top")
-        fig.text(x, y_caixa_topo - 0.017, valor, transform=fig.transFigure, fontsize=8.5,
+        fig.text(x, y_caixa_topo - 0.017, valor, transform=fig.transFigure, fontsize=t.TAM_CORPO_SECUNDARIO,
                  color=t.COR_TEXTO_PRINCIPAL, fontfamily=t.FONTE_SANS, fontweight="bold", va="top")
     y -= 0.06
     c.texto_corrido(
         fig, MARGEM, y, 1 - 2 * MARGEM,
         "Publicação append-only: meses OFFICIAL já publicados permanecem congelados em execuções "
         "futuras; meses PROVISIONAL permanecem revisáveis até a confirmação pelo próximo benchmark "
-        "PIA anual. Ver docs/adr/0012.", fontsize=8, cor=t.COR_TEXTO_SECUNDARIO)
+        "PIA anual. Ver docs/adr/0012.", fontsize=t.TAM_CORPO_PEQUENO, cor=t.COR_TEXTO_SECUNDARIO)
 
     c.rodape_pagina(fig,
                     "Metodologia completa: docs/METODOLOGIA.md. Decisões de publicação: "

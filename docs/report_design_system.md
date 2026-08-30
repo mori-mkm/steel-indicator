@@ -48,6 +48,14 @@ foto ou cor de marca da S&P foi reaproveitado; a identidade abaixo
 | `COR_LINHA_GRADE` | `#DCDCDC` | grade horizontal dos gráficos |
 | `COR_POSITIVO` | `#3B7A57` | delta/variação positiva |
 | `COR_NEGATIVO` | `#A93226` | delta/variação negativa |
+| `COR_II` | `#6B4226` | componente "Imposto de Importação" no gráfico de composição do PPI_COST |
+| `COR_AFRMM` | `#8C6E4A` | componente "AFRMM" no gráfico de composição do PPI_COST |
+| `COR_DESPESAS_PORTO` | `#7F8C8D` | componente "Despesas de porto" no gráfico de composição do PPI_COST |
+| `COR_FRETE_INTERNO` | `#95A5A6` | componente "Frete interno" no gráfico de composição do PPI_COST — avaliado contra `COR_APROXIMADO` (distância RGB ~12, a mais próxima de toda a paleta) e mantido deliberadamente: nunca aparecem lado a lado, eixos semânticos diferentes (categoria de gráfico vs. selo de proveniência) |
+
+Os quatro acima existiam como hex literal direto em `pages.py`/`pages_v3.py`
+até ago/2026 (Fase 2 da migração de design system) — só ganharam nome,
+nenhum valor mudou.
 
 Paleta categórica de gráfico (séries múltiplas: câmbio, penetração,
 origem por país): `#B5541C` (ember), `#2B4570` (índigo), `#3B7A57`
@@ -69,6 +77,52 @@ host**: se um ambiente futuro não tiver `Georgia`/`Arial` instaladas, o
 matplotlib cai para `DejaVu Sans` automaticamente para o que faltar —
 degrada silenciosamente (relatório continua sendo gerado, só perde a
 diferenciação serif/sans), nunca quebra a geração do PDF.
+
+### Tamanhos de fonte
+
+Fase 1 da migração de design system (ago/2026): os 24 tamanhos abaixo
+existiam como número literal direto em `pages.py`/`pages_v3.py`/
+`components.py` até esta etapa — nenhum valor mudou, só ganharam nome em
+`theme.py`. Não é uma escala tipográfica desenhada com um "step"
+consistente: é o resultado de ajuste fino independente por componente ao
+longo de várias tarefas anteriores — por isso os valores são quase
+contínuos (6.6 a 56) em vez de uma progressão limpa.
+
+| Token | Valor | Uso principal |
+|---|---:|---|
+| `TAM_HERO_NUMERO` | 56 | número IPIA-HRC gigante, capa V3 |
+| `TAM_TITULO_CAPA` | 34 | título "IPIA"/"IPIA-HRC", capa V1/V2 |
+| `TAM_HERO_SECUNDARIO` | 26 | número PPI_COST, página 2 V3 |
+| `TAM_TITULO_CAPA_V3` | 22 | título "IPIA-HRC", capa V3 |
+| `TAM_TITULO_PAGINA` | 19 | título de página interna (2-4), todas as versões |
+| `TAM_VALOR_KPI` | 17 | valor grande de `kpi_tile` |
+| `TAM_VALOR_SECUNDARIO` | 13 | valor PPI_OFFER (secundário/aproximado) |
+| `TAM_TITULO_SECAO` | 12 | default de `secao_titulo`; subtítulo serif da capa V1/V2 |
+| `TAM_TITULO_GRAFICO` | 11 | título de `cabecalho_grafico` |
+| `TAM_DECK_CAPA` | 10.5 | linha "deck"/interpretação em destaque da capa |
+| `TAM_KICKER` | 10 | kicker da `banda_topo`; mensagens "sem dado" |
+| `TAM_SUBTITULO_PAGINA` | 9.5 | subtítulo abaixo do título de página |
+| `TAM_CORPO_PADRAO` | 9 | default de `texto_corrido` |
+| `TAM_CORPO_DISCLOSURE` | 8.7 | default de `caixa_texto`; parágrafos de metodologia |
+| `TAM_CORPO_SECUNDARIO` | 8.5 | cabeçalho de página interna; rótulos/valores de KPI e tabelas |
+| `TAM_NOTA_METODOLOGICA` | 8.2 | notas de disclosure/watchlist, página 3-4 V3 |
+| `TAM_CORPO_PEQUENO` | 8 | o mais reutilizado — ylabel de eixo, rodapé, tabelas, waterfall |
+| `TAM_CORPO_COMPACTO` | 7.6 | Principais Premissas / Narrativa do Mês, página 2 V3 |
+| `TAM_ROTULO_AUXILIAR` | 7.5 | nota/período de KPI; legenda de gráfico; labelsize de eixo |
+| `TAM_CORPO_MINIMO` | 7.4 | parágrafo "Como ler este relatório", capa V3 |
+| `TAM_NOTA_FONTE_SECUNDARIA` | 7.2 | "Related Research"; disclaimer da capa V3 |
+| `TAM_SELO` | 7 | selo de proveniência; marcador de composição atípica (ADR 0018) |
+| `TAM_FONTE_CITACAO` | 6.8 | citação de fontes no rodapé — a menor fonte "de verdade" |
+| `TAM_CITACAO_REVISOR` | 6.6 | linha "Revisado por..." da narrativa mensal (ADR 0017) |
+
+**Divergência registrada, não adotada:** uma proposta externa (ago/2026)
+sugeriu uma escala menor e diferente (`cover_title=36`, `page_title=16`,
+`section_title=12`, `body=9`...) usando fontes `Inter`/`Source Serif 4`.
+Decisão do usuário: manter os valores reais acima integralmente — a
+proposta não foi adotada nem parcialmente. `Inter`/`Source Serif 4`
+também não estão instaladas neste ambiente (confirmado via
+`matplotlib.font_manager`) — ver seção de tipografia acima para o
+mecanismo de fallback que já protege contra esse risco.
 
 ## Grid e página
 
@@ -175,3 +229,65 @@ aplicação visual:
   `metodo_motivo` de `formula_alternativa` fica só na página 4 (que tem
   espaço de sobra) — colocá-lo na interpretação do gráfico de página 3
   empurrava o resto da página contra o rodapé (testado e revertido).
+
+## Princípios visuais gerais
+
+Regras já em vigor por decisão explícita do usuário em tarefas
+anteriores, nunca escritas aqui até agora — existiam só como instrução
+pontual, não como referência consultável antes de mexer no relatório.
+
+- **O relatório deve parecer research institucional, não um dashboard
+  exportado para PDF.** Nunca usar ícone/emoji como marcador visual,
+  mesmo para chamar atenção a uma ressalva — usar marcador tipográfico
+  em texto (ex.: asterisco + nota de rodapé, no mesmo espírito de como a
+  S&P marca "f" de forecast nos gráficos deles). Precedente real: o
+  marcador de composição atípica na tabela de drivers (ADR 0018) usa
+  `"Preço FOB*"` + rodapé, nunca um símbolo de alerta.
+- Espaço em branco generoso, hierarquia editorial forte (serif para
+  título, sans para corpo/dado) — já seguido desde a origem do design
+  system (seção acima), só não estava nomeado como princípio explícito.
+- Gráficos sempre em fundo branco, sem moldura, título/interpretação/
+  legenda sempre FORA da área de plotagem (já documentado em "Cabeçalho
+  de gráfico" acima).
+
+## Sistema de coordenadas (para qualquer proposta futura de tokens)
+
+O relatório é desenhado com **matplotlib** (`PdfPages`), em **coordenadas
+fracionárias de figura (0.0–1.0)** via `transform=fig.transFigure` — não
+em pontos/polegadas absolutos. `theme.LARGURA_POL`/`ALTURA_POL` (A4, em
+polegadas) só entram como fator de conversão pontual quando uma função
+precisa medir texto em pontos reais (`components._largura_texto_pt` via
+`TextPath`, para quebra de linha e altura de caixa). Qualquer proposta de
+tokens de geometria (margem, largura de coluna, posição de gráfico) só é
+diretamente aplicável a este código se expressa nesse mesmo sistema —
+uma proposta em pontos absolutos sobre página Letter (612×792pt) não é
+uma troca de valor, é uma troca de paradigma de renderização inteira
+(reescreveria a lógica de posicionamento de `pages.py`/`pages_v3.py`/
+`components.py` por completo, não só os tokens).
+
+## Caixas de destaque: aparência real (não aspiracional)
+
+`components.caixa_destaque` (usada por `caixa_texto`/`callout_numerado`)
+desenha **cantos arredondados** (`boxstyle="round,pad=0.02,
+rounding_size=0.02"`) **com borda** (`edgecolor`, `linewidth=1`) — esta é
+a aparência real já publicada, não um estado transitório a corrigir. Uma
+proposta externa (ago/2026) sugeriu o oposto (cantos retos, sem borda,
+"não transformar callouts em cards modernos") — registrado aqui como
+**divergência em aberto, não adotada**: mudar a forma do callout é
+decisão de identidade visual (mesma categoria de "trocar paleta de
+cor"), não algo a decidir silenciosamente numa atualização de doc.
+
+## Item em aberto: largura da coluna de narrativa
+
+A seção "Narrativa do mês" (página 2, ADR 0017/0018) usa hoje a largura
+útil TOTAL da página (`1 - 2×MARGEM`), igual a qualquer parágrafo de
+corpo do relatório — não uma coluna estreita dedicada. Uma proposta
+externa (ago/2026) sugere que texto de narrativa NUNCA deveria esticar
+para preencher a largura da página, com uma coluna deliberadamente mais
+estreita. **Não implementado ainda** — estreitar a coluna muda um valor
+numérico de layout (largura), então fica fora do escopo desta atualização
+de doc (Fase 0 da migração de design system, ago/2026) e só deveria
+acontecer numa etapa futura de spacing, com aprovação explícita, dado que
+a página 2 já tem orçamento vertical apertado (ver "DRIVER TABLE" acima)
+e estreitar a coluna sem redistribuir a largura sobrando exige decidir
+para onde esse espaço vai.
